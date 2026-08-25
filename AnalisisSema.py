@@ -30,7 +30,7 @@ class Lexer:
         # Reglas léxicas
         rules = [
             ('BLOQUE_COMENTARIO', r'/\*.*?\*/'),
-            ('LINEA_COMENTARIO', r'//.*'),
+            ('LINEA_COMENTARIO', r'//[^\n]*'),
             ('RESERVADA', r'\b(int|cout|cin|float|void|char|double|string|boolean|if|else|while|for|return|break|continue|true|false)\b'),
             ('NUMERO',   r'\d+(\.\d*)?'),
             ('IDENTIFICADOR',       r'[A-Za-z_][A-Za-z0-9_]*'),
@@ -525,7 +525,11 @@ class Parser:
 
         if stopped_by == 'PUNTO_Y_COMA':
             if tokens_expr and tokens_expr[0].type == 'ASIGNACION':
-                nodo_init = self.parse_expr_tokens(tokens_expr[1:])
+                if len(tokens_expr) == 1:
+                    pos = tokens_expr[0].pos_start
+                    self.add_error("falta expresión después de '='", pos, pos + 1)
+                else:
+                    nodo_init = self.parse_expr_tokens(tokens_expr[1:])
             self.advance()
         elif stopped_by == 'LLAVE_IZQ':
             pos = start_tok.pos_start if start_tok else self.current().pos_start
@@ -967,11 +971,14 @@ class SemanticAnalyzer:
         elif et == "Instrucción":  # return
             linea = nodo.linea or 1
             if nodo.hijos:
-                t = self.tipo_de(nodo.hijos[0])
-                if (t is not None and self.tipo_retorno_actual and self.tipo_retorno_actual != 'void'
-                        and t != self.tipo_retorno_actual
-                        and not (t in TIPOS_NUMERICOS and self.tipo_retorno_actual in TIPOS_NUMERICOS)):
-                    self.error(linea, f"el valor de return es {t} pero la función devuelve {self.tipo_retorno_actual}")
+                if self.tipo_retorno_actual == 'void':
+                    self.error(linea, f"una función void no puede devolver un valor")
+                else:
+                    t = self.tipo_de(nodo.hijos[0])
+                    if (t is not None and self.tipo_retorno_actual
+                            and t != self.tipo_retorno_actual
+                            and not (t in TIPOS_NUMERICOS and self.tipo_retorno_actual in TIPOS_NUMERICOS)):
+                        self.error(linea, f"el valor de return es {t} pero la función devuelve {self.tipo_retorno_actual}")
             elif self.tipo_retorno_actual and self.tipo_retorno_actual != 'void':
                 self.error(linea, f"falta un valor de return para una función que devuelve {self.tipo_retorno_actual}")
         elif et == "Entrada por Consola":
@@ -1105,6 +1112,9 @@ class SemanticAnalyzer:
             return None
 
         if et == "Assign":
+            if len(nodo.hijos) < 2:
+                self.error(linea, "expresión incompleta en asignación")
+                return None
             nodo_izq = nodo.hijos[0]
             tipo_der = self.tipo_de(nodo.hijos[1])
             tipo_izq = self.tipo_de(nodo_izq)
