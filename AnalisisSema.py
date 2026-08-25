@@ -36,6 +36,7 @@ class Lexer:
             ('IDENTIFICADOR',       r'[A-Za-z_][A-Za-z0-9_]*'),
             ('CADENA',   r'".*?"'),
             ('OP_LOGICO', r'&&|\|\||!'),
+            ('OP_INCREMENTO', r'\+\+|--'),
             ('OP_FLUJO',        r'<<|>>'),
             ('OP_RELACIONAL',   r'==|!=|<=|>=|<|>'),
             ('OP_ARITMETICO',  r'[+\-*/%]'),
@@ -230,9 +231,9 @@ class ExprParser:
                     self.advance()
                 acceso = self._nodo("AccesoArreglo", tok.value, tok.pos_start)
                 acceso.agregar_hijo(indice)
-                return acceso
+                nodo = acceso
             # llamada a función: id(args)
-            if self.current() and self.current().type == 'PARENTESIS_IZQ':
+            elif self.current() and self.current().type == 'PARENTESIS_IZQ':
                 self.advance()
                 llamada = self._nodo("Llamada", tok.value, tok.pos_start)
                 while self.current() and self.current().type != 'PARENTESIS_DER':
@@ -245,7 +246,14 @@ class ExprParser:
                         break
                 if self.current() and self.current().type == 'PARENTESIS_DER':
                     self.advance()
-                return llamada
+                nodo = llamada
+                
+            if self.current() and self.current().type == 'OP_INCREMENTO':
+                op_tok = self.advance()
+                nodo_inc = self._nodo("PostIncDec", op_tok.value, op_tok.pos_start)
+                nodo_inc.agregar_hijo(nodo)
+                return nodo_inc
+
             return nodo
         if tok.type == 'PARENTESIS_IZQ':
             self.advance()
@@ -630,14 +638,71 @@ class Parser:
             return nodo_if
             
         elif tok.type == 'RESERVADA' and tok.value in ['while', 'for']:
+            es_for = (tok.value == 'for')
             nodo_ciclo = NodoAST("Ciclo", tok.value)
             nodo_ciclo.linea = self.line_of(tok.pos_start)
             self.advance()
-            nodo_cond = self.parse_condition()
-            if nodo_cond:
-                contenedor = NodoAST("Condición")
-                contenedor.agregar_hijo(nodo_cond)
-                nodo_ciclo.agregar_hijo(contenedor)
+            
+            if not es_for:
+                nodo_cond = self.parse_condition()
+                if nodo_cond:
+                    contenedor = NodoAST("Condición")
+                    contenedor.agregar_hijo(nodo_cond)
+                    nodo_ciclo.agregar_hijo(contenedor)
+            else:
+                tok_paren = self.current()
+                if not (tok_paren and tok_paren.type == 'PARENTESIS_IZQ'):
+                    pos = tok_paren.pos_start if tok_paren else len(self.source_code)
+                    self.add_error("Se esperaba '(' para el ciclo for.", pos, pos + 1)
+                else:
+                    self.advance()
+                    inicio = self.pos
+                    parens = 1
+                    while self.current() and parens > 0:
+                        t = self.current()
+                        if t.type == 'PARENTESIS_IZQ':
+                            parens += 1
+                        elif t.type == 'PARENTESIS_DER':
+                            parens -= 1
+                            if parens == 0:
+                                break
+                        self.advance()
+                        
+                    tokens_for = self.tokens[inicio:self.pos]
+                    if parens > 0:
+                        self.add_error("Falta cerrar paréntesis ')' en el for.", tok_paren.pos_start, tok_paren.pos_start + 1)
+                    else:
+                        self.advance()
+                        
+                    partes = []
+                    actual = []
+                    for t in tokens_for:
+                        if t.type == 'PUNTO_Y_COMA':
+                            partes.append(actual)
+                            actual = []
+                        else:
+                            actual.append(t)
+                    partes.append(actual)
+                    
+                    if len(partes) != 3:
+                        self.add_error("La estructura del for debe tener 3 partes separadas por ';'.", tok_paren.pos_start, tok_paren.pos_end)
+                    else:
+                        nodo_init = self.parse_expr_tokens(partes[0])
+                        nodo_cond = self.parse_expr_tokens(partes[1])
+                        nodo_upd = self.parse_expr_tokens(partes[2])
+                        
+                        if nodo_init:
+                            cont_init = NodoAST("Inicialización")
+                            cont_init.agregar_hijo(nodo_init)
+                            nodo_ciclo.agregar_hijo(cont_init)
+                        if nodo_cond:
+                            cont_cond = NodoAST("Condición")
+                            cont_cond.agregar_hijo(nodo_cond)
+                            nodo_ciclo.agregar_hijo(cont_cond)
+                        if nodo_upd:
+                            cont_upd = NodoAST("Actualización")
+                            cont_upd.agregar_hijo(nodo_upd)
+                            nodo_ciclo.agregar_hijo(cont_upd)
 
             nodo_cuerpo = self.parse_statement()
             if nodo_cuerpo: 
@@ -673,6 +738,26 @@ class Parser:
             return nodo_ret
             
         
+        elif tok.type == 'RESERVADA' and tok.value == 'cin':
+            nodo_cin = NodoAST("Entrada por Consola", "cin")
+            nodo_cin.linea = self.line_of(tok.pos_start)
+            self.advance()
+            
+            inicio_scan = self.pos
+            parens, brackets, stopped_by = self.scan_expression(stop_types=('PUNTO_Y_COMA', 'LLAVE_DER'))
+            tokens_expr = self.tokens[inicio_scan:self.pos]
+            
+            if stopped_by == 'PUNTO_Y_COMA':
+                self.advance()
+                for parte in self._partir_por_flujo(tokens_expr):
+                    nodo_parte = self.parse_expr_tokens(parte)
+                    if nodo_parte:
+                        nodo_cin.agregar_hijo(nodo_parte)
+            else:
+                self.add_error("Falta punto y coma ';' al final del cin.", tok.pos_start, tok.pos_end)
+                
+            return nodo_cin
+            
         elif tok.type == 'RESERVADA' and tok.value == 'cout':
             nodo_cout = NodoAST("Salida por Consola", "cout")
             nodo_cout.linea = self.line_of(tok.pos_start)
@@ -889,11 +974,19 @@ class SemanticAnalyzer:
                     self.error(linea, f"el valor de return es {t} pero la función devuelve {self.tipo_retorno_actual}")
             elif self.tipo_retorno_actual and self.tipo_retorno_actual != 'void':
                 self.error(linea, f"falta un valor de return para una función que devuelve {self.tipo_retorno_actual}")
+        elif et == "Entrada por Consola":
+            for hijo in nodo.hijos:
+                tipo = self.tipo_de(hijo)
+                if hijo.etiqueta not in ("Id", "AccesoArreglo"):
+                    self.error(hijo.linea or nodo.linea or 1, "cin solo puede leer en variables o accesos a arreglos")
         elif et == "Salida por Consola":
             for hijo in nodo.hijos:
                 self.tipo_de(hijo)
+        elif et in ("Inicialización", "Actualización"):
+            for h in nodo.hijos:
+                self.tipo_de(h)
         elif et in ("Assign", "BinOp", "UnOp", "Id", "Num", "Bool", "Cadena",
-                    "Ternario", "AccesoArreglo", "Llamada"):
+                    "Ternario", "AccesoArreglo", "Llamada", "PostIncDec"):
             # sentencia-expresión, p. ej. "x = 5;"
             self.tipo_de(nodo)
         # cualquier otra etiqueta (p. ej. "Expresión" placeholder, "ErrorExpr") se ignora
@@ -1021,6 +1114,15 @@ class SemanticAnalyzer:
                 self.error(linea, f"no se puede asignar {tipo_der} a {tipo_izq}")
                 return None
             return tipo_izq
+
+        if et == "PostIncDec":
+            tipo_operando = self.tipo_de(nodo.hijos[0])
+            if tipo_operando is None:
+                return None
+            if tipo_operando not in TIPOS_NUMERICOS:
+                self.error(linea, f"el operador '{nodo.valor}' solo aplica a tipos numéricos, no a {tipo_operando}")
+                return None
+            return tipo_operando
 
         return None
 
