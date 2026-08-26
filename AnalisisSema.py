@@ -358,7 +358,13 @@ class Parser:
         un árbol de expresión de verdad, usando ExprParser."""
         if not tokens:
             return None
-        return ExprParser(tokens, self.line_of).parse()
+        ep = ExprParser(tokens, self.line_of)
+        nodo = ep.parse()
+        if ep.pos < len(tokens):
+            tok_sobrante = tokens[ep.pos]
+            self.add_error(f"Sintaxis inválida cerca de '{tok_sobrante.value}'.", tok_sobrante.pos_start, tok_sobrante.pos_end)
+            return NodoAST("ErrorExpr", "error")
+        return nodo
 
     def _partir_por_flujo(self, tokens):
         """Divide una lista de tokens de 'cout << a << b' en sub-listas por cada '<<'."""
@@ -1054,6 +1060,8 @@ class SemanticAnalyzer:
             return None
 
         if et == "UnOp":
+            if len(nodo.hijos) < 1:
+                return None
             tipo_operando = self.tipo_de(nodo.hijos[0])
             if tipo_operando is None:
                 return None
@@ -1066,6 +1074,8 @@ class SemanticAnalyzer:
             return tipo_operando
 
         if et == "BinOp":
+            if len(nodo.hijos) < 2:
+                return None
             izq = self.tipo_de(nodo.hijos[0])
             der = self.tipo_de(nodo.hijos[1])
             if izq is None or der is None:
@@ -1097,6 +1107,8 @@ class SemanticAnalyzer:
             return None
 
         if et == "Ternario":
+            if len(nodo.hijos) < 3:
+                return None
             tipo_cond = self.tipo_de(nodo.hijos[0])
             tipo_si = self.tipo_de(nodo.hijos[1])
             tipo_no = self.tipo_de(nodo.hijos[2])
