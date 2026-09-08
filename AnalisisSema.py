@@ -1,6 +1,15 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import re
+import os
+import sys
+
+# Asegurar importación del paquete compilador.ir
+_base_dir = os.path.dirname(os.path.abspath(__file__))
+if _base_dir not in sys.path:
+    sys.path.insert(0, _base_dir)
+
+from compilador.ir.generator import IRGenerator, Cuadruplo, generar_ir
 
 class Token:
     def __init__(self, type, value, pos_start, pos_end):
@@ -849,7 +858,7 @@ class Parser:
 
 # ============================================================================
 #  Tabla de símbolos: pila de ámbitos (scopes). El tope de la pila es el
-#  ámbito activo. Ver diapositiva 7-8.
+#  ámbito activo.
 # ============================================================================
 class SymbolTable:
     def __init__(self):
@@ -880,7 +889,7 @@ class SymbolTable:
         return True
 
     def lookup(self, nombre):
-        """Busca desde el ámbito más interno hacia afuera (insert/lookup, ver diapositiva 6)."""
+        """Busca desde el ámbito más interno hacia afuera (insert/lookup)."""
         for ambito in reversed(self.scopes):
             if nombre in ambito:
                 return ambito[nombre]
@@ -888,10 +897,9 @@ class SymbolTable:
 
 
 # ============================================================================
-#  Analizador semántico: recorre el AST (patrón Visitor, diapositiva 16) y
-#  valida: variables declaradas, redeclaraciones, y compatibilidad de tipos
-#  (diapositiva 9). Los errores siguen el formato obligatorio de la
-#  diapositiva 12: "Error semántico línea N: motivo".
+#  Analizador semántico: recorre el AST (patrón Visitor) y
+#  valida: variables declaradas, redeclaraciones, y compatibilidad de tipos.
+#  Los errores siguen el formato: "Error semántico línea N: motivo".
 # ============================================================================
 class SemanticAnalyzer:
     def __init__(self):
@@ -942,7 +950,7 @@ class SemanticAnalyzer:
         self.tipo_retorno_actual = tipo_retorno
         if bloque:
             # el cuerpo de la función COMPARTE el ámbito con sus parámetros
-            # (no se abre un scope adicional para él, ver diapositiva 8)
+            # (no se abre un scope adicional para él)
             for hijo in bloque.hijos:
                 self.visitar_statement(hijo)
         self.tipo_retorno_actual = tipo_anterior
@@ -1152,8 +1160,8 @@ class SemanticAnalyzer:
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Analizador Léxico y Sintáctico")
-        self.root.geometry("800x680")
+        self.root.title("Analizador Léxico, Sintáctico, Semántico y Código Intermedio (IR)")
+        self.root.geometry("900x700")
 
         self.ultimo_ast = None  # guardamos el último árbol generado para poder verlo cuando el usuario quiera
         
@@ -1179,17 +1187,21 @@ class App:
         mid_frame.pack(fill=tk.X, padx=10, pady=5)
         
         btn_lexico = tk.Button(mid_frame, text="Análisis Léxico", command=self.analisis_lexico, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"))
-        btn_lexico.pack(side=tk.LEFT, padx=5)
+        btn_lexico.pack(side=tk.LEFT, padx=4)
         
         btn_sintactico = tk.Button(mid_frame, text="Análisis Sintáctico", command=self.analisis_sintactico, bg="#2196F3", fg="white", font=("Arial", 10, "bold"))
-        btn_sintactico.pack(side=tk.LEFT, padx=5)
+        btn_sintactico.pack(side=tk.LEFT, padx=4)
 
         btn_semantico = tk.Button(mid_frame, text="Análisis Semántico", command=self.analisis_semantico, bg="#FF9800", fg="white", font=("Arial", 10, "bold"))
-        btn_semantico.pack(side=tk.LEFT, padx=5)
+        btn_semantico.pack(side=tk.LEFT, padx=4)
 
-        self.btn_arbol = tk.Button(mid_frame, text="Ver Árbol Sintáctico (AST)", command=self.ver_arbol_sintactico,
+        self.btn_arbol = tk.Button(mid_frame, text="Ver AST", command=self.ver_arbol_sintactico,
                                     bg="#9C27B0", fg="white", font=("Arial", 10, "bold"), state=tk.DISABLED)
-        self.btn_arbol.pack(side=tk.LEFT, padx=5)
+        self.btn_arbol.pack(side=tk.LEFT, padx=4)
+
+        btn_ir = tk.Button(mid_frame, text="Código Intermedio (IR)", command=self.analisis_codigo_intermedio,
+                           bg="#673AB7", fg="white", font=("Arial", 10, "bold"))
+        btn_ir.pack(side=tk.LEFT, padx=4)
         
         # Frame inferior para la tabla de resultados léxicos
         bottom_frame = tk.Frame(self.root)
@@ -1269,7 +1281,7 @@ class App:
 
     def analisis_semantico(self):
         """Fase 3 del pipeline: sólo corre si el código ya pasó léxico +
-        sintáctico sin errores (igual que en la diapositiva 3)."""
+        sintáctico sin errores."""
         self.limpiar_resaltado()
         codigo, parser, arbol_ast = self._parsear()
 
@@ -1328,6 +1340,219 @@ class App:
 
         for info in tabla.historial:
             tv.insert("", tk.END, values=(info["nombre"], info["tipo"], info["ambito"], info["linea"]))
+
+    def analisis_codigo_intermedio(self):
+        """Fase 4 del pipeline: Generación de Código Intermedio (IR)
+        a partir del AST validado."""
+        self.limpiar_resaltado()
+        codigo, parser, arbol_ast = self._parsear()
+
+        if parser.errors:
+            for err in parser.errors:
+                self.resaltar_error(codigo, err.pos_start, err.pos_end)
+
+            mensaje = ("El código tiene errores de sintaxis; corrígelos antes de poder "
+                       "generar código intermedio:\n\n")
+            for i, err in enumerate(parser.errors, 1):
+                fila_col = self.index_to_tk_public(codigo, err.pos_start)
+                mensaje += f"{i}. (línea {fila_col}) {err.message}\n"
+            messagebox.showerror("Corrige la sintaxis primero", mensaje)
+            return
+
+        # Validación semántica previa al código intermedio
+        analizador = SemanticAnalyzer()
+        errores_sem, tabla = analizador.analizar(arbol_ast)
+        if errores_sem:
+            resp = messagebox.askyesno(
+                "Advertencias Semánticas",
+                f"El código contiene {len(errores_sem)} error(es) semántico(s):\n\n" +
+                "\n".join(errores_sem[:5]) +
+                ("\n..." if len(errores_sem) > 5 else "") +
+                "\n\n¿Deseas generar el código intermedio (IR) de todas formas para pruebas?"
+            )
+            if not resp:
+                self.mostrar_resultado_semantico(errores_sem, tabla)
+                return
+
+        generador = IRGenerator()
+        instrucciones, postfijas, texto_ir = generador.generar(arbol_ast)
+        self.mostrar_resultado_ir(instrucciones, postfijas, generador)
+
+    def mostrar_resultado_ir(self, instrucciones, postfijas, generador):
+        ventana = tk.Toplevel(self.root)
+        ventana.title("Generación de Código Intermedio (IR)")
+        ventana.geometry("860x660")
+
+        # Encabezado
+        header_frame = tk.Frame(ventana, bg="#EDE7F6", padx=15, pady=10)
+        header_frame.pack(fill=tk.X)
+        tk.Label(header_frame, text="Código Intermedio (IR)", font=("Arial", 13, "bold"),
+                 bg="#EDE7F6", fg="#4A148C").pack(anchor="w")
+        tk.Label(header_frame, text="Del AST validado a instrucciones simples (Triplos, Cuádruplos y Postfija)",
+                 font=("Arial", 9), bg="#EDE7F6", fg="#6A1B9A").pack(anchor="w")
+
+        # Pestañas
+        notebook = ttk.Notebook(ventana)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+
+        # ------------------------------------------------------------------
+        # Pestaña 1: Tabla de Cuádruplos
+        # ------------------------------------------------------------------
+        tab_cuadruplos = ttk.Frame(notebook)
+        notebook.add(tab_cuadruplos, text=" Tabla de Cuádruplos ")
+
+        tk.Label(tab_cuadruplos, text="Instrucciones en formato Cuádruplo (#, op, arg1, arg2, res):",
+                 font=("Arial", 10, "bold"), fg="#333").pack(anchor="w", pady=(8, 4))
+
+        frame_tabla = tk.Frame(tab_cuadruplos)
+        frame_tabla.pack(fill=tk.BOTH, expand=True)
+
+        scroll_y = ttk.Scrollbar(frame_tabla, orient=tk.VERTICAL)
+        scroll_x = ttk.Scrollbar(frame_tabla, orient=tk.HORIZONTAL)
+
+        cols = ("#", "Operador", "Argumento 1", "Argumento 2", "Resultado / Destino")
+        tv_cuads = ttk.Treeview(frame_tabla, columns=cols, show="headings",
+                                yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        scroll_y.config(command=tv_cuads.yview)
+        scroll_x.config(command=tv_cuads.xview)
+        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+        tv_cuads.pack(fill=tk.BOTH, expand=True)
+
+        tv_cuads.heading("#", text="#")
+        tv_cuads.heading("Operador", text="Operador (op)")
+        tv_cuads.heading("Argumento 1", text="Argumento 1 (arg1)")
+        tv_cuads.heading("Argumento 2", text="Argumento 2 (arg2)")
+        tv_cuads.heading("Resultado / Destino", text="Resultado / Destino (res)")
+
+        tv_cuads.column("#", width=60, anchor="center")
+        tv_cuads.column("Operador", width=120, anchor="center")
+        tv_cuads.column("Argumento 1", width=140, anchor="center")
+        tv_cuads.column("Argumento 2", width=140, anchor="center")
+        tv_cuads.column("Resultado / Destino", width=160, anchor="center")
+
+        for inst in instrucciones:
+            tv_cuads.insert("", tk.END, values=(
+                f"#{inst.numero}",
+                inst.op,
+                inst.arg1 or "—",
+                inst.arg2 or "—",
+                inst.resultado or "—"
+            ))
+
+        # ------------------------------------------------------------------
+        # Pestaña 2: Formato .ir
+        # ------------------------------------------------------------------
+        tab_ir = ttk.Frame(notebook)
+        notebook.add(tab_ir, text=" Formato .ir ")
+
+        tk.Label(tab_ir, text="Formato de archivo .ir (#N (op, arg1, arg2, res)):",
+                 font=("Arial", 10, "bold"), fg="#333").pack(anchor="w", pady=(8, 4))
+
+        frame_txt_ir = tk.Frame(tab_ir)
+        frame_txt_ir.pack(fill=tk.BOTH, expand=True)
+
+        scroll_ir = ttk.Scrollbar(frame_txt_ir)
+        scroll_ir.pack(side=tk.RIGHT, fill=tk.Y)
+        txt_ir = tk.Text(frame_txt_ir, font=("Consolas", 11), yscrollcommand=scroll_ir.set, bg="#F9F9F9")
+        txt_ir.pack(fill=tk.BOTH, expand=True)
+        scroll_ir.config(command=txt_ir.yview)
+
+        texto_ir_completo = generador.obtener_texto_ir()
+        txt_ir.insert(tk.END, texto_ir_completo)
+        txt_ir.config(state=tk.DISABLED)
+
+        # ------------------------------------------------------------------
+        # Pestaña 3: Código de Tres Direcciones (3AC)
+        # ------------------------------------------------------------------
+        tab_3ac = ttk.Frame(notebook)
+        notebook.add(tab_3ac, text=" Tres Direcciones (3AC) ")
+
+        tk.Label(tab_3ac, text="Representación en código de tres direcciones (3AC):",
+                 font=("Arial", 10, "bold"), fg="#333").pack(anchor="w", pady=(8, 4))
+
+        frame_txt_3ac = tk.Frame(tab_3ac)
+        frame_txt_3ac.pack(fill=tk.BOTH, expand=True)
+
+        scroll_3ac = ttk.Scrollbar(frame_txt_3ac)
+        scroll_3ac.pack(side=tk.RIGHT, fill=tk.Y)
+        txt_3ac = tk.Text(frame_txt_3ac, font=("Consolas", 11), yscrollcommand=scroll_3ac.set, bg="#F9F9F9")
+        txt_3ac.pack(fill=tk.BOTH, expand=True)
+        scroll_3ac.config(command=txt_3ac.yview)
+
+        texto_3ac_completo = generador.obtener_texto_3ac()
+        txt_3ac.insert(tk.END, texto_3ac_completo)
+        txt_3ac.config(state=tk.DISABLED)
+
+        # ------------------------------------------------------------------
+        # Pestaña 4: Notación Postfija
+        # ------------------------------------------------------------------
+        tab_postfija = ttk.Frame(notebook)
+        notebook.add(tab_postfija, text=" Notación Postfija ")
+
+        tk.Label(tab_postfija, text="Recorrido postorden del AST de expresiones (hijos -> padre):",
+                 font=("Arial", 10, "bold"), fg="#333").pack(anchor="w", pady=(8, 4))
+
+        frame_post = tk.Frame(tab_postfija)
+        frame_post.pack(fill=tk.BOTH, expand=True)
+
+        scroll_post = ttk.Scrollbar(frame_post)
+        scroll_post.pack(side=tk.RIGHT, fill=tk.Y)
+        cols_post = ("Línea", "Expresión Infija", "Notación Postfija (RPN)")
+        tv_post = ttk.Treeview(frame_post, columns=cols_post, show="headings", yscrollcommand=scroll_post.set)
+        scroll_post.config(command=tv_post.yview)
+        tv_post.pack(fill=tk.BOTH, expand=True)
+
+        tv_post.heading("Línea", text="Línea")
+        tv_post.heading("Expresión Infija", text="Expresión Infija")
+        tv_post.heading("Notación Postfija (RPN)", text="Notación Postfija (RPN)")
+
+        tv_post.column("Línea", width=60, anchor="center")
+        tv_post.column("Expresión Infija", width=280, anchor="w")
+        tv_post.column("Notación Postfija (RPN)", width=340, anchor="w")
+
+        if postfijas:
+            for p in postfijas:
+                tv_post.insert("", tk.END, values=(p["linea"], p["infija"], p["postfija"]))
+        else:
+            tv_post.insert("", tk.END, values=("—", "Sin expresiones evaluadas", "—"))
+
+        # ------------------------------------------------------------------
+        # Barra inferior de acciones
+        # ------------------------------------------------------------------
+        bottom_frame = tk.Frame(ventana, pady=10, padx=15)
+        bottom_frame.pack(fill=tk.X)
+
+        def guardar_archivo_ir():
+            ruta = filedialog.asksaveasfilename(
+                title="Guardar archivo de Código Intermedio (.ir)",
+                defaultextension=".ir",
+                filetypes=[("Código Intermedio (*.ir)", "*.ir"), ("Todos los archivos", "*.*")]
+            )
+            if ruta:
+                try:
+                    with open(ruta, "w", encoding="utf-8") as f:
+                        f.write(texto_ir_completo + "\n")
+                    messagebox.showinfo("Guardado exitoso", f"Archivo guardado correctamente en:\n{ruta}")
+                except Exception as ex:
+                    messagebox.showerror("Error al guardar", f"No se pudo guardar el archivo:\n{ex}")
+
+        def copiar_al_portapapeles():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(texto_ir_completo)
+            messagebox.showinfo("Copiado", "¡Código IR copiado al portapapeles!")
+
+        btn_guardar = tk.Button(bottom_frame, text="💾 Guardar archivo .ir", command=guardar_archivo_ir,
+                                bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), padx=10, pady=4)
+        btn_guardar.pack(side=tk.LEFT, padx=5)
+
+        btn_copiar = tk.Button(bottom_frame, text="📋 Copiar código .ir", command=copiar_al_portapapeles,
+                               bg="#2196F3", fg="white", font=("Arial", 10, "bold"), padx=10, pady=4)
+        btn_copiar.pack(side=tk.LEFT, padx=5)
+
+        btn_cerrar = tk.Button(bottom_frame, text="Cerrar", command=ventana.destroy,
+                               bg="#757575", fg="white", font=("Arial", 10), padx=10, pady=4)
+        btn_cerrar.pack(side=tk.RIGHT, padx=5)
 
     def ver_arbol_sintactico(self):
         if self.ultimo_ast is None:
