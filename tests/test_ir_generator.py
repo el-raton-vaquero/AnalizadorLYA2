@@ -1,3 +1,7 @@
+import sys, os
+_raiz = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if _raiz not in sys.path:
+    sys.path.insert(0, _raiz)
 """
 Pruebas automatizadas para el Generador de Código Intermedio (IR).
 """
@@ -55,13 +59,13 @@ class TestIRGenerator(unittest.TestCase):
 
         self.assertEqual(len(insts), 8)
         self.assertEqual(insts[0].to_ir_tuple(), "#1 (>, x, 5, t1)")
-        self.assertEqual(insts[1].to_ir_tuple(), "#2 (ifFalse, t1, , L1)")
+        self.assertEqual(insts[1].to_ir_tuple(), "#2 (IF_FALSE, t1, , L1)")
         self.assertEqual(insts[2].to_ir_tuple(), "#3 (-, x, 1, t2)")
         self.assertEqual(insts[3].to_ir_tuple(), "#4 (=, t2, , x)")
-        self.assertEqual(insts[4].to_ir_tuple(), "#5 (goto, , , L2)")
-        self.assertEqual(insts[5].to_ir_tuple(), "#6 (label, , , L1)")
+        self.assertEqual(insts[4].to_ir_tuple(), "#5 (GOTO, , , L2)")
+        self.assertEqual(insts[5].to_ir_tuple(), "#6 (LABEL, , , L1)")
         self.assertEqual(insts[6].to_ir_tuple(), "#7 (=, 0, , x)")
-        self.assertEqual(insts[7].to_ir_tuple(), "#8 (label, , , L2)")
+        self.assertEqual(insts[7].to_ir_tuple(), "#8 (LABEL, , , L2)")
 
     def test_while_loop(self):
         """Verifica la generación de cuádruplos para ciclo while."""
@@ -69,13 +73,13 @@ class TestIRGenerator(unittest.TestCase):
         ast = self.compilar_a_ast(codigo)
         insts, _, _ = self.generator.generar(ast)
 
-        # Debe tener L1, condición, ifFalse L2, cuerpo, goto L1, L2
+        # Debe tener L1, condición, IF_FALSE L2, cuerpo, GOTO L1, L2
         ops = [i.op for i in insts]
-        self.assertIn("label", ops)
+        self.assertIn("LABEL", ops)
         self.assertIn("<", ops)
-        self.assertIn("ifFalse", ops)
+        self.assertIn("IF_FALSE", ops)
         self.assertIn("+", ops)
-        self.assertIn("goto", ops)
+        self.assertIn("GOTO", ops)
 
     def test_for_loop(self):
         """Verifica la generación de cuádruplos para ciclo for."""
@@ -86,10 +90,10 @@ class TestIRGenerator(unittest.TestCase):
         ops = [i.op for i in insts]
         self.assertIn("=", ops)
         self.assertIn("<", ops)
-        self.assertIn("ifFalse", ops)
+        self.assertIn("IF_FALSE", ops)
         self.assertIn("print", ops)
         self.assertIn("+", ops)
-        self.assertIn("goto", ops)
+        self.assertIn("GOTO", ops)
 
     def test_postfija_compleja(self):
         """
@@ -117,7 +121,7 @@ class TestIRGenerator(unittest.TestCase):
         self.assertIn("<=", ops)
         self.assertIn(">=", ops)
         self.assertIn("||", ops)
-        self.assertIn("ifFalse", ops)
+        self.assertIn("IF_FALSE", ops)
         self.assertIn("return", ops)
 
 if __name__ == "__main__":

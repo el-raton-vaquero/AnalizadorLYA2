@@ -44,10 +44,10 @@ class Lexer:
             ('NUMERO',   r'\d+(\.\d*)?'),
             ('IDENTIFICADOR',       r'[A-Za-z_][A-Za-z0-9_]*'),
             ('CADENA',   r'".*?"'),
-            ('OP_LOGICO', r'&&|\|\||!'),
             ('OP_INCREMENTO', r'\+\+|--'),
             ('OP_FLUJO',        r'<<|>>'),
             ('OP_RELACIONAL',   r'==|!=|<=|>=|<|>'),
+            ('OP_LOGICO', r'&&|\|\||!'),
             ('OP_ARITMETICO',  r'[+\-*/%]'),
             ('ASIGNACION',    r'='),
             ('PARENTESIS_IZQ',   r'\('),
@@ -1160,8 +1160,9 @@ class SemanticAnalyzer:
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Analizador Léxico, Sintáctico, Semántico y Código Intermedio (IR)")
-        self.root.geometry("900x700")
+        self.root.title("Compilador C++ | Léxico, Sintáctico, Semántico y Código Intermedio (IR)")
+        self.root.geometry("980x740")
+        self.root.minsize(800, 600)
 
         self.ultimo_ast = None  # guardamos el último árbol generado para poder verlo cuando el usuario quiera
         
@@ -1169,18 +1170,36 @@ class App:
         top_frame = tk.Frame(self.root)
         top_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        tk.Label(top_frame, text="Código Fuente:", font=("Arial", 12, "bold")).pack(anchor="w")
+        header_editor = tk.Frame(top_frame)
+        header_editor.pack(fill=tk.X, pady=(0, 5))
+
+        tk.Label(header_editor, text="Código Fuente (C++):", font=("Arial", 11, "bold"), fg="#1A237E").pack(side=tk.LEFT)
+
+        # Diccionario de ejemplos para evaluación rápida
+        self.ejemplos = {
+            "1. Aritmética básica (x = 3 + 4 * 2;)": "int x = 3 + 4 * 2;",
+            "2. Precedencia con resta (y = 8 - 2 * 3;)": "y = 8 - 2 * 3;",
+            "3. Paréntesis modifican precedencia ((8 - 2) * 3)": "res = (8 - 2) * 3;",
+            "4. Condicional (if - else)": "if (a > b) {\n    x = 1;\n} else {\n    x = 2;\n}",
+            "5. Ciclo While": "while (x < 10) {\n    x = x + 1;\n}",
+            "6. Ciclo For con salida": "for (i = 0; i < 5; i = i + 1) {\n    cout << i;\n}",
+            "7. Operador Ternario": "res = (x > 0) ? 10 : 20;",
+            "8. Función con retorno": "int suma(int a, int b) {\n    return a + b;\n}",
+            "9. Ejemplo original (cuadradoLimitado)": """float cuadradoLimitado(x) float x {\n    /* devuelve x al cuadrado, pero nunca más de 100 */\n    return (x<=-10.0||x>=10.0)?100:x*x;\n}"""
+        }
+
+        tk.Label(header_editor, text="Cargar caso de prueba:", font=("Arial", 10), fg="#555").pack(side=tk.RIGHT, padx=(5, 5))
+        self.combo_ejemplos = ttk.Combobox(header_editor, values=list(self.ejemplos.keys()), state="readonly", width=38)
+        self.combo_ejemplos.pack(side=tk.RIGHT)
+        self.combo_ejemplos.set("1. Aritmética básica (x = 3 + 4 * 2;)")
+        self.combo_ejemplos.bind("<<ComboboxSelected>>", self.cargar_ejemplo_seleccionado)
         
-        self.text_area = tk.Text(top_frame, height=15, font=("Consolas", 12))
+        self.text_area = tk.Text(top_frame, height=13, font=("Consolas", 12))
         self.text_area.pack(fill=tk.BOTH, expand=True)
         self.text_area.tag_configure("error", background="red", foreground="white")
         
-        # Cargar un código de ejemplo
-        codigo_ejemplo = """float cuadradoLimitado(x) float x {
-    /* devuelve x al cuadrado, pero nunca más de 100 */
-    return (x<=-10.0||x>=10.0)?100:x*x;
-}"""
-        self.text_area.insert(tk.END, codigo_ejemplo)
+        # Cargar ejemplo por defecto
+        self.text_area.insert(tk.END, self.ejemplos["1. Aritmética básica (x = 3 + 4 * 2;)"])
         
         # Frame intermedio para los botones
         mid_frame = tk.Frame(self.root)
@@ -1203,25 +1222,99 @@ class App:
                            bg="#673AB7", fg="white", font=("Arial", 10, "bold"))
         btn_ir.pack(side=tk.LEFT, padx=4)
         
-        # Frame inferior para la tabla de resultados léxicos
+        # Frame inferior: Notebook con pestañas de resultados integrados
         bottom_frame = tk.Frame(self.root)
         bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        tk.Label(bottom_frame, text="Tabla de Tokens:", font=("Arial", 12, "bold")).pack(anchor="w")
-        
+
+        self.main_notebook = ttk.Notebook(bottom_frame)
+        self.main_notebook.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 1: Tokens Léxicos ---
+        self.tab_tokens = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_tokens, text=" 📋 Tokens Léxicos ")
+
         columns = ("Lexema", "Token", "Posición")
-        self.tree = ttk.Treeview(bottom_frame, columns=columns, show="headings", height=8)
+        self.tree = ttk.Treeview(self.tab_tokens, columns=columns, show="headings")
         self.tree.heading("Lexema", text="Lexema")
         self.tree.heading("Token", text="Token (Tipo)")
         self.tree.heading("Posición", text="Posición (Inicio - Fin)")
-        
-        self.tree.column("Lexema", width=150)
-        self.tree.column("Token", width=150)
-        self.tree.column("Posición", width=100)
-        # Configuramos el color para las filas con errores
+        self.tree.column("Lexema", width=180)
+        self.tree.column("Token", width=180)
+        self.tree.column("Posición", width=120)
         self.tree.tag_configure("error_lexico", background="#ffcccc", foreground="red")
 
+        scroll_tree_y = ttk.Scrollbar(self.tab_tokens, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll_tree_y.set)
+        scroll_tree_y.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 2: Cuádruplos (Código Intermedio) ---
+        self.tab_cuads = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_cuads, text=" ⚡ Cuádruplos (IR) ")
+
+        cols_cuad = ("#", "Operador", "Argumento 1", "Argumento 2", "Resultado / Destino")
+        self.tv_main_cuads = ttk.Treeview(self.tab_cuads, columns=cols_cuad, show="headings")
+        for c in cols_cuad:
+            self.tv_main_cuads.heading(c, text=c)
+        self.tv_main_cuads.column("#", width=60, anchor="center")
+        self.tv_main_cuads.column("Operador", width=120, anchor="center")
+        self.tv_main_cuads.column("Argumento 1", width=150, anchor="center")
+        self.tv_main_cuads.column("Argumento 2", width=150, anchor="center")
+        self.tv_main_cuads.column("Resultado / Destino", width=180, anchor="center")
+
+        scroll_cuads_y = ttk.Scrollbar(self.tab_cuads, orient=tk.VERTICAL, command=self.tv_main_cuads.yview)
+        self.tv_main_cuads.configure(yscrollcommand=scroll_cuads_y.set)
+        scroll_cuads_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tv_main_cuads.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 3: Tres Direcciones (3AC) ---
+        self.tab_3ac = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_3ac, text=" 🔤 Tres Direcciones (3AC) ")
+        
+        scroll_3ac_y = ttk.Scrollbar(self.tab_3ac)
+        scroll_3ac_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.txt_main_3ac = tk.Text(self.tab_3ac, font=("Consolas", 11), yscrollcommand=scroll_3ac_y.set, bg="#FAFAFA")
+        self.txt_main_3ac.pack(fill=tk.BOTH, expand=True)
+        scroll_3ac_y.config(command=self.txt_main_3ac.yview)
+
+        # --- Pestaña 4: Notación Postfija (RPN) ---
+        self.tab_post = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_post, text=" 🏷️ Notación Postfija ")
+
+        cols_post = ("Línea", "Expresión Infija", "Notación Postfija (RPN)")
+        self.tv_main_post = ttk.Treeview(self.tab_post, columns=cols_post, show="headings")
+        for c in cols_post:
+            self.tv_main_post.heading(c, text=c)
+        self.tv_main_post.column("Línea", width=60, anchor="center")
+        self.tv_main_post.column("Expresión Infija", width=280, anchor="w")
+        self.tv_main_post.column("Notación Postfija (RPN)", width=350, anchor="w")
+
+        scroll_post_y = ttk.Scrollbar(self.tab_post, orient=tk.VERTICAL, command=self.tv_main_post.yview)
+        self.tv_main_post.configure(yscrollcommand=scroll_post_y.set)
+        scroll_post_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tv_main_post.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 5: Tabla de Símbolos ---
+        self.tab_simbolos = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_simbolos, text=" 📊 Tabla de Símbolos ")
+
+        cols_simb = ("Nombre", "Tipo", "Ámbito", "Línea")
+        self.tv_main_simbolos = ttk.Treeview(self.tab_simbolos, columns=cols_simb, show="headings")
+        for c in cols_simb:
+            self.tv_main_simbolos.heading(c, text=c)
+            self.tv_main_simbolos.column(c, width=80 if c == "Línea" else 160)
+
+        scroll_simb_y = ttk.Scrollbar(self.tab_simbolos, orient=tk.VERTICAL, command=self.tv_main_simbolos.yview)
+        self.tv_main_simbolos.configure(yscrollcommand=scroll_simb_y.set)
+        scroll_simb_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tv_main_simbolos.pack(fill=tk.BOTH, expand=True)
+
+    def cargar_ejemplo_seleccionado(self, event=None):
+        clave = self.combo_ejemplos.get()
+        if clave in self.ejemplos:
+            self.text_area.delete("1.0", tk.END)
+            self.text_area.insert(tk.END, self.ejemplos[clave])
+            self.limpiar_resaltado()
 
     def obtener_codigo(self):
         return self.text_area.get("1.0", tk.END)
@@ -1231,6 +1324,7 @@ class App:
 
     def analisis_lexico(self):
         self.limpiar_resaltado()
+        self.main_notebook.select(self.tab_tokens)
         for item in self.tree.get_children():
             self.tree.delete(item)
             
@@ -1341,6 +1435,13 @@ class App:
         for info in tabla.historial:
             tv.insert("", tk.END, values=(info["nombre"], info["tipo"], info["ambito"], info["linea"]))
 
+        # Actualizar también la tabla de símbolos en la ventana principal
+        for item in self.tv_main_simbolos.get_children():
+            self.tv_main_simbolos.delete(item)
+        for info in tabla.historial:
+            self.tv_main_simbolos.insert("", tk.END, values=(info["nombre"], info["tipo"], info["ambito"], info["linea"]))
+        self.main_notebook.select(self.tab_simbolos)
+
     def analisis_codigo_intermedio(self):
         """Fase 4 del pipeline: Generación de Código Intermedio (IR)
         a partir del AST validado."""
@@ -1376,6 +1477,38 @@ class App:
 
         generador = IRGenerator()
         instrucciones, postfijas, texto_ir = generador.generar(arbol_ast)
+
+        # Actualizar pestaña de cuádruplos en la ventana principal
+        for item in self.tv_main_cuads.get_children():
+            self.tv_main_cuads.delete(item)
+        for inst in instrucciones:
+            self.tv_main_cuads.insert("", tk.END, values=(
+                f"#{inst.numero}",
+                inst.op,
+                inst.arg1 or "—",
+                inst.arg2 or "—",
+                inst.resultado or "—"
+            ))
+
+        # Actualizar pestaña 3AC en la ventana principal
+        self.txt_main_3ac.config(state=tk.NORMAL)
+        self.txt_main_3ac.delete("1.0", tk.END)
+        self.txt_main_3ac.insert(tk.END, generador.obtener_texto_3ac())
+        self.txt_main_3ac.config(state=tk.DISABLED)
+
+        # Actualizar pestaña de postfijas en la ventana principal
+        for item in self.tv_main_post.get_children():
+            self.tv_main_post.delete(item)
+        if postfijas:
+            for p in postfijas:
+                self.tv_main_post.insert("", tk.END, values=(p["linea"], p["infija"], p["postfija"]))
+        else:
+            self.tv_main_post.insert("", tk.END, values=("—", "Sin expresiones evaluadas", "—"))
+
+        # Cambiar automáticamente a la pestaña de Cuádruplos en la ventana principal
+        self.main_notebook.select(self.tab_cuads)
+
+        # Mostrar además la ventana flotante completa con opciones de guardado
         self.mostrar_resultado_ir(instrucciones, postfijas, generador)
 
     def mostrar_resultado_ir(self, instrucciones, postfijas, generador):
