@@ -10,6 +10,10 @@ if _base_dir not in sys.path:
     sys.path.insert(0, _base_dir)
 
 from compilador.ir.generator import IRGenerator, Cuadruplo, generar_ir
+from compilador.opt import (
+    BasicBlock, identificar_bloques_basicos, ControlFlowGraph,
+    IROptimizer, CFGCanvas, OptimizationReport, optimizar_ir_completo
+)
 
 class Token:
     def __init__(self, type, value, pos_start, pos_end):
@@ -1165,6 +1169,8 @@ class App:
         self.root.minsize(800, 600)
 
         self.ultimo_ast = None  # guardamos el último árbol generado para poder verlo cuando el usuario quiera
+        self.ultimo_optimizador = None  # último optimizador ejecutado (Unidad 3)
+        self.ultimo_cfg_vista = "original"  # vista actual de CFG: 'original' o 'optimizado'
         
         # Frame superior para el editor de código
         top_frame = tk.Frame(self.root)
@@ -1185,7 +1191,35 @@ class App:
             "6. Ciclo For con salida": "for (i = 0; i < 5; i = i + 1) {\n    cout << i;\n}",
             "7. Operador Ternario": "res = (x > 0) ? 10 : 20;",
             "8. Función con retorno": "int suma(int a, int b) {\n    return a + b;\n}",
-            "9. Ejemplo original (cuadradoLimitado)": """float cuadradoLimitado(x) float x {\n    /* devuelve x al cuadrado, pero nunca más de 100 */\n    return (x<=-10.0||x>=10.0)?100:x*x;\n}"""
+            "9. Ejemplo original (cuadradoLimitado)": """float cuadradoLimitado(x) float x {\n    /* devuelve x al cuadrado, pero nunca más de 100 */\n    return (x<=-10.0||x>=10.0)?100:x*x;\n}""",
+            "10. Optimización CFG (Integrador U3)": """int a = 5;
+int b = 10;
+int t1 = a + b;
+int t2 = a + b;
+int x;
+if (t1 > 10) {
+    x = 1;
+} else {
+    x = 0;
+}
+int y = x;
+int z = 20 + 30;
+int w = 100;
+return y;
+w = 200;""",
+            "11. Plegado y Subexpresiones (CSE)": """int a = 2 + 3;
+int b = 4 * 5;
+int c = a + b;
+int d = a + b;
+int e = c * 2;""",
+            "12. Control de Flujo y Código Inalcanzable": """int x = 10;
+if (x > 5) {
+    y = 100;
+} else {
+    y = 200;
+}
+return y;
+y = 999;"""
         }
 
         tk.Label(header_editor, text="Cargar caso de prueba:", font=("Arial", 10), fg="#555").pack(side=tk.RIGHT, padx=(5, 5))
@@ -1221,6 +1255,10 @@ class App:
         btn_ir = tk.Button(mid_frame, text="Código Intermedio (IR)", command=self.analisis_codigo_intermedio,
                            bg="#673AB7", fg="white", font=("Arial", 10, "bold"))
         btn_ir.pack(side=tk.LEFT, padx=4)
+
+        btn_opt = tk.Button(mid_frame, text="Optimización (CFG / IR)", command=self.analisis_optimizacion,
+                            bg="#E91E63", fg="white", font=("Arial", 10, "bold"))
+        btn_opt.pack(side=tk.LEFT, padx=4)
         
         # Frame inferior: Notebook con pestañas de resultados integrados
         bottom_frame = tk.Frame(self.root)
@@ -1308,6 +1346,147 @@ class App:
         self.tv_main_simbolos.configure(yscrollcommand=scroll_simb_y.set)
         scroll_simb_y.pack(side=tk.RIGHT, fill=tk.Y)
         self.tv_main_simbolos.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 6: Bloques Básicos (BB) ---
+        self.tab_bb = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_bb, text=" 🧱 Bloques Básicos ")
+
+        cols_bb = ("Bloque", "Etiqueta", "Instrucciones (3AC)", "Estado")
+        self.tv_main_bb = ttk.Treeview(self.tab_bb, columns=cols_bb, show="headings")
+        self.tv_main_bb.heading("Bloque", text="Bloque (BB)")
+        self.tv_main_bb.heading("Etiqueta", text="Etiqueta Líder")
+        self.tv_main_bb.heading("Instrucciones (3AC)", text="Instrucciones Contenidas")
+        self.tv_main_bb.heading("Estado", text="Alcanzabilidad / Tipo")
+        self.tv_main_bb.column("Bloque", width=100, anchor="center")
+        self.tv_main_bb.column("Etiqueta", width=120, anchor="center")
+        self.tv_main_bb.column("Instrucciones (3AC)", width=480, anchor="w")
+        self.tv_main_bb.column("Estado", width=160, anchor="center")
+
+        scroll_bb_y = ttk.Scrollbar(self.tab_bb, orient=tk.VERTICAL, command=self.tv_main_bb.yview)
+        self.tv_main_bb.configure(yscrollcommand=scroll_bb_y.set)
+        scroll_bb_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tv_main_bb.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 7: Grafo de Flujo de Control (CFG / GFG) ---
+        self.tab_cfg = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_cfg, text=" 🕸️ Grafo de Flujo (CFG) ")
+
+        cfg_ctrl_frame = tk.Frame(self.tab_cfg, bg="#EEEEEE", pady=4, padx=8)
+        cfg_ctrl_frame.pack(fill=tk.X)
+
+        self.btn_toggle_cfg_orig = tk.Button(
+            cfg_ctrl_frame, text="🔵 Ver CFG Original",
+            command=lambda: self._conmutar_vista_cfg("original"),
+            bg="#1565C0", fg="white", font=("Arial", 9, "bold"), padx=8
+        )
+        self.btn_toggle_cfg_orig.pack(side=tk.LEFT, padx=3)
+
+        self.btn_toggle_cfg_opt = tk.Button(
+            cfg_ctrl_frame, text="🟢 Ver CFG Optimizado",
+            command=lambda: self._conmutar_vista_cfg("optimizado"),
+            bg="#2E7D32", fg="white", font=("Arial", 9, "bold"), padx=8
+        )
+        self.btn_toggle_cfg_opt.pack(side=tk.LEFT, padx=3)
+
+        self.lbl_cfg_estado = tk.Label(
+            cfg_ctrl_frame, text="Mostrando: CFG Original",
+            font=("Arial", 9, "italic"), bg="#EEEEEE", fg="#333"
+        )
+        self.lbl_cfg_estado.pack(side=tk.LEFT, padx=12)
+
+        self.main_cfg_canvas = CFGCanvas(self.tab_cfg)
+        self.main_cfg_canvas.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 8: Tabla de Sucesores ---
+        self.tab_sucesores = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_sucesores, text=" 📑 Tabla de Sucesores ")
+
+        cols_suc = ("Bloque", "Sucesores en el Grafo", "Condición / Flujo")
+        self.tv_main_sucesores = ttk.Treeview(self.tab_sucesores, columns=cols_suc, show="headings")
+        self.tv_main_sucesores.heading("Bloque", text="Bloque")
+        self.tv_main_sucesores.heading("Sucesores en el Grafo", text="Sucesores Directos")
+        self.tv_main_sucesores.heading("Condición / Flujo", text="Estado de Ejecución")
+        self.tv_main_sucesores.column("Bloque", width=140, anchor="center")
+        self.tv_main_sucesores.column("Sucesores en el Grafo", width=350, anchor="w")
+        self.tv_main_sucesores.column("Condición / Flujo", width=220, anchor="center")
+
+        scroll_suc_y = ttk.Scrollbar(self.tab_sucesores, orient=tk.VERTICAL, command=self.tv_main_sucesores.yview)
+        self.tv_main_sucesores.configure(yscrollcommand=scroll_suc_y.set)
+        scroll_suc_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tv_main_sucesores.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 9: IR Optimizado ---
+        self.tab_ir_opt = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_ir_opt, text=" ✨ IR Optimizado ")
+
+        sub_nb_opt = ttk.Notebook(self.tab_ir_opt)
+        sub_nb_opt.pack(fill=tk.BOTH, expand=True)
+
+        # Subpestaña 9.1: Cuádruplos Optimizados
+        tab_opt_cuads = ttk.Frame(sub_nb_opt)
+        sub_nb_opt.add(tab_opt_cuads, text=" Cuádruplos Optimizados ")
+        self.tv_main_opt_cuads = ttk.Treeview(tab_opt_cuads, columns=cols_cuad, show="headings")
+        for c in cols_cuad:
+            self.tv_main_opt_cuads.heading(c, text=c)
+        self.tv_main_opt_cuads.column("#", width=60, anchor="center")
+        self.tv_main_opt_cuads.column("Operador", width=120, anchor="center")
+        self.tv_main_opt_cuads.column("Argumento 1", width=150, anchor="center")
+        self.tv_main_opt_cuads.column("Argumento 2", width=150, anchor="center")
+        self.tv_main_opt_cuads.column("Resultado / Destino", width=180, anchor="center")
+        scroll_opt_c_y = ttk.Scrollbar(tab_opt_cuads, orient=tk.VERTICAL, command=self.tv_main_opt_cuads.yview)
+        self.tv_main_opt_cuads.configure(yscrollcommand=scroll_opt_c_y.set)
+        scroll_opt_c_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tv_main_opt_cuads.pack(fill=tk.BOTH, expand=True)
+
+        # Subpestaña 9.2: 3AC Optimizado
+        tab_opt_3ac = ttk.Frame(sub_nb_opt)
+        sub_nb_opt.add(tab_opt_3ac, text=" 3AC Optimizado ")
+        scroll_opt_3ac = ttk.Scrollbar(tab_opt_3ac)
+        scroll_opt_3ac.pack(side=tk.RIGHT, fill=tk.Y)
+        self.txt_main_opt_3ac = tk.Text(tab_opt_3ac, font=("Consolas", 11), yscrollcommand=scroll_opt_3ac.set, bg="#F9FBE7")
+        self.txt_main_opt_3ac.pack(fill=tk.BOTH, expand=True)
+        scroll_opt_3ac.config(command=self.txt_main_opt_3ac.yview)
+
+        # Subpestaña 9.3: Comparativa Lado a Lado (Antes vs Después)
+        tab_opt_diff = ttk.Frame(sub_nb_opt)
+        sub_nb_opt.add(tab_opt_diff, text=" Comparativa (Antes vs Después) ")
+        scroll_opt_diff = ttk.Scrollbar(tab_opt_diff)
+        scroll_opt_diff.pack(side=tk.RIGHT, fill=tk.Y)
+        self.txt_main_diff = tk.Text(tab_opt_diff, font=("Consolas", 10), yscrollcommand=scroll_opt_diff.set, bg="#FAFAFA")
+        self.txt_main_diff.pack(fill=tk.BOTH, expand=True)
+        scroll_opt_diff.config(command=self.txt_main_diff.yview)
+
+        # --- Pestaña 10: Tabla de Transformaciones ---
+        self.tab_transf = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_transf, text=" 📋 Tabla de Transformaciones ")
+
+        cols_transf = ("#", "Bloque", "Técnica Aplicada", "Código Original", "Código Optimizado", "Justificación Técnica")
+        self.tv_main_transf = ttk.Treeview(self.tab_transf, columns=cols_transf, show="headings")
+        for c in cols_transf:
+            self.tv_main_transf.heading(c, text=c)
+        self.tv_main_transf.column("#", width=45, anchor="center")
+        self.tv_main_transf.column("Bloque", width=80, anchor="center")
+        self.tv_main_transf.column("Técnica Aplicada", width=220, anchor="w")
+        self.tv_main_transf.column("Código Original", width=180, anchor="w")
+        self.tv_main_transf.column("Código Optimizado", width=160, anchor="w")
+        self.tv_main_transf.column("Justificación Técnica", width=280, anchor="w")
+
+        scroll_transf_y = ttk.Scrollbar(self.tab_transf, orient=tk.VERTICAL, command=self.tv_main_transf.yview)
+        scroll_transf_x = ttk.Scrollbar(self.tab_transf, orient=tk.HORIZONTAL, command=self.tv_main_transf.xview)
+        self.tv_main_transf.configure(yscrollcommand=scroll_transf_y.set, xscrollcommand=scroll_transf_x.set)
+        scroll_transf_y.pack(side=tk.RIGHT, fill=tk.Y)
+        scroll_transf_x.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tv_main_transf.pack(fill=tk.BOTH, expand=True)
+
+        # --- Pestaña 11: Métricas y Análisis ---
+        self.tab_metricas = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.tab_metricas, text=" 📈 Métricas y Análisis ")
+
+        scroll_met_y = ttk.Scrollbar(self.tab_metricas)
+        scroll_met_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.txt_main_metricas = tk.Text(self.tab_metricas, font=("Consolas", 10), yscrollcommand=scroll_met_y.set, bg="#FFFFFF")
+        self.txt_main_metricas.pack(fill=tk.BOTH, expand=True)
+        scroll_met_y.config(command=self.txt_main_metricas.yview)
 
     def cargar_ejemplo_seleccionado(self, event=None):
         clave = self.combo_ejemplos.get()
@@ -1683,6 +1862,11 @@ class App:
                                bg="#2196F3", fg="white", font=("Arial", 10, "bold"), padx=10, pady=4)
         btn_copiar.pack(side=tk.LEFT, padx=5)
 
+        btn_opt_ir = tk.Button(bottom_frame, text="🚀 Optimizar IR (CFG / U3)",
+                               command=lambda: [ventana.destroy(), self.analisis_optimizacion()],
+                               bg="#E91E63", fg="white", font=("Arial", 10, "bold"), padx=10, pady=4)
+        btn_opt_ir.pack(side=tk.LEFT, padx=5)
+
         btn_cerrar = tk.Button(bottom_frame, text="Cerrar", command=ventana.destroy,
                                bg="#757575", fg="white", font=("Arial", 10), padx=10, pady=4)
         btn_cerrar.pack(side=tk.RIGHT, padx=5)
@@ -1744,6 +1928,420 @@ class App:
         
         self.text_area.tag_add("error", start_tk, end_tk)
         self.text_area.see(start_tk)
+
+    def _conmutar_vista_cfg(self, vista):
+        self.ultimo_cfg_vista = vista
+        if not self.ultimo_optimizador:
+            return
+        if vista == "original":
+            self.main_cfg_canvas.dibujar_cfg(self.ultimo_optimizador.cfg_original)
+            self.lbl_cfg_estado.config(text="Mostrando: CFG Original", fg="#1565C0")
+        else:
+            self.main_cfg_canvas.dibujar_cfg(self.ultimo_optimizador.cfg_optimizado)
+            self.lbl_cfg_estado.config(text="Mostrando: CFG Optimizado", fg="#2E7D32")
+
+    def analisis_optimizacion(self):
+        """
+        Ejecuta el pipeline completo de Optimización de Código Intermedio (Unidad 3):
+        Identificación de Bloques Básicos, Construcción del GFG/CFG, Aplicación
+        de Técnicas de Optimización, Tabla de Transformaciones y Métricas.
+        """
+        self.limpiar_resaltado()
+
+        codigo, parser, arbol_ast = self._parsear()
+
+        if parser.errors:
+            for err in parser.errors:
+                self.resaltar_error(codigo, err.pos_start, err.pos_end)
+
+            mensaje = ("El código tiene errores de sintaxis; corrígelos antes de optimizar:\n\n")
+            for i, err in enumerate(parser.errors, 1):
+                fila_col = self.index_to_tk_public(codigo, err.pos_start)
+                mensaje += f"{i}. (línea {fila_col}) {err.message}\n"
+            messagebox.showerror("Corrige la sintaxis primero", mensaje)
+            return
+
+        if not arbol_ast or not getattr(arbol_ast, "hijos", []):
+            messagebox.showwarning("Sin código", "No hay código o instrucciones para optimizar.")
+            return
+
+        # Validación semántica previa
+        analizador = SemanticAnalyzer()
+        errores_sem, tabla = analizador.analizar(arbol_ast)
+        if errores_sem:
+            resp = messagebox.askyesno(
+                "Advertencias Semánticas",
+                f"El código contiene {len(errores_sem)} error(es) semántico(s):\n\n" +
+                "\n".join(errores_sem[:5]) +
+                ("\n..." if len(errores_sem) > 5 else "") +
+                "\n\n¿Deseas continuar con la optimización de todas formas para pruebas?"
+            )
+            if not resp:
+                self.mostrar_resultado_semantico(errores_sem, tabla)
+                return
+
+        generador = IRGenerator()
+        instrucciones, postfijas, texto_ir = generador.generar(arbol_ast)
+
+        if not instrucciones:
+            messagebox.showwarning("Sin instrucciones", "No se generaron instrucciones de código intermedio para optimizar.")
+            return
+
+        # Crear y ejecutar el optimizador
+        opt = IROptimizer(instrucciones)
+        opt.optimizar()
+        self.ultimo_optimizador = opt
+
+        # Actualizar pestañas integradas en la ventana principal
+        self._actualizar_pestanas_optimizacion(opt)
+
+        # Seleccionar automáticamente la pestaña del Grafo de Flujo en la ventana principal
+        self.main_notebook.select(self.tab_cfg)
+
+        # Abrir ventana completa de Optimización y Grafo de Flujo
+        self.mostrar_resultado_optimizacion(opt)
+
+    def _actualizar_pestanas_optimizacion(self, opt: IROptimizer):
+        # 1. Pestaña Bloques Básicos
+        for item in self.tv_main_bb.get_children():
+            self.tv_main_bb.delete(item)
+        for b in opt.bloques_originales:
+            estado = "Inalcanzable" if b.es_inalcanzable else ("Entrada" if b.es_entrada else ("Salida" if b.es_salida else "Normal"))
+            texto_3ac = " ; ".join(i.to_3ac() for i in b.instrucciones)
+            self.tv_main_bb.insert("", tk.END, values=(
+                b.id,
+                b.etiqueta or "—",
+                texto_3ac,
+                estado
+            ))
+
+        # 2. Grafo de Flujo (Canvas)
+        self.main_cfg_canvas.dibujar_cfg(opt.cfg_original if self.ultimo_cfg_vista == "original" else opt.cfg_optimizado)
+
+        # 3. Tabla de Sucesores
+        for item in self.tv_main_sucesores.get_children():
+            self.tv_main_sucesores.delete(item)
+        for fila in opt.cfg_original.obtener_tabla_sucesores():
+            estado = "Inalcanzable" if fila["es_inalcanzable"] else "Flujo Activo"
+            self.tv_main_sucesores.insert("", tk.END, values=(
+                fila["bloque"],
+                fila["sucesores"],
+                estado
+            ))
+
+        # 4. IR Optimizado (Cuádruplos)
+        for item in self.tv_main_opt_cuads.get_children():
+            self.tv_main_opt_cuads.delete(item)
+        for inst in opt.instrucciones_optimizadas:
+            self.tv_main_opt_cuads.insert("", tk.END, values=(
+                f"#{inst.numero}",
+                inst.op,
+                inst.arg1 or "—",
+                inst.arg2 or "—",
+                inst.resultado or "—"
+            ))
+
+        # 3AC Optimizado
+        self.txt_main_opt_3ac.config(state=tk.NORMAL)
+        self.txt_main_opt_3ac.delete("1.0", tk.END)
+        for inst in opt.instrucciones_optimizadas:
+            self.txt_main_opt_3ac.insert(tk.END, f"{inst.numero}: {inst.to_3ac()}\n")
+        self.txt_main_opt_3ac.config(state=tk.DISABLED)
+
+        # Comparativa lado a lado
+        self.txt_main_diff.config(state=tk.NORMAL)
+        self.txt_main_diff.delete("1.0", tk.END)
+        self.txt_main_diff.insert(tk.END, f"{'=== CÓDIGO IR ORIGINAL (before.ir) ===':<42} | {'=== CÓDIGO IR OPTIMIZADO (after.ir) ==='}\n")
+        self.txt_main_diff.insert(tk.END, "-" * 90 + "\n")
+        n_orig = len(opt.instrucciones_originales)
+        n_opt = len(opt.instrucciones_optimizadas)
+        max_len = max(n_orig, n_opt)
+        for idx in range(max_len):
+            str_orig = opt.instrucciones_originales[idx].to_ir_tuple() if idx < n_orig else ""
+            str_opt = opt.instrucciones_optimizadas[idx].to_ir_tuple() if idx < n_opt else ""
+            self.txt_main_diff.insert(tk.END, f"{str_orig:<45} | {str_opt}\n")
+        self.txt_main_diff.config(state=tk.DISABLED)
+
+        # 5. Tabla de Transformaciones
+        for item in self.tv_main_transf.get_children():
+            self.tv_main_transf.delete(item)
+        for t in opt.transformaciones:
+            self.tv_main_transf.insert("", tk.END, values=(
+                t.numero,
+                t.bloque,
+                t.tecnica,
+                t.original,
+                t.optimizado,
+                t.justificacion
+            ))
+
+        # 6. Métricas y Análisis
+        reporte = OptimizationReport(opt)
+        self.txt_main_metricas.config(state=tk.NORMAL)
+        self.txt_main_metricas.delete("1.0", tk.END)
+        self.txt_main_metricas.insert(tk.END, reporte.generar_reporte_texto())
+        self.txt_main_metricas.config(state=tk.DISABLED)
+
+    def mostrar_resultado_optimizacion(self, opt: IROptimizer):
+        """
+        Abre una ventana completa e interactiva con todas las vistas de optimización y CFG.
+        """
+        ventana = tk.Toplevel(self.root)
+        ventana.title("Optimización de Código Intermedio (CFG / GFG)")
+        ventana.geometry("1020x720")
+        ventana.minsize(850, 600)
+
+        # Encabezado
+        header_frame = tk.Frame(ventana, bg="#FCE4EC", padx=15, pady=10)
+        header_frame.pack(fill=tk.X)
+        tk.Label(
+            header_frame, text="Optimización de Código Intermedio mediante Grafo de Flujo de Control",
+            font=("Arial", 13, "bold"), bg="#FCE4EC", fg="#880E4F"
+        ).pack(anchor="w")
+        tk.Label(
+            header_frame,
+            text="Constant Folding, Propagación de Constantes, CSE, Eliminación de Código Muerto, Bloques Inalcanzables y Saltos",
+            font=("Arial", 9), bg="#FCE4EC", fg="#AD1457"
+        ).pack(anchor="w")
+
+        notebook = ttk.Notebook(ventana)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
+
+        # --------------------------------------------------------------------
+        # Pestaña 1: Grafo de Flujo de Control (Canvas con controles)
+        # --------------------------------------------------------------------
+        tab_grafo = ttk.Frame(notebook)
+        notebook.add(tab_grafo, text=" 🕸️ Grafo de Flujo (CFG) ")
+
+        ctrl_bar = tk.Frame(tab_grafo, bg="#ECEFF1", pady=5, padx=8)
+        ctrl_bar.pack(fill=tk.X)
+
+        canvas_modal = CFGCanvas(tab_grafo)
+        canvas_modal.pack(fill=tk.BOTH, expand=True)
+
+        lbl_modal_info = tk.Label(ctrl_bar, text="Vista activa: CFG Original", font=("Arial", 9, "bold"), bg="#ECEFF1", fg="#1565C0")
+
+        def ver_orig():
+            canvas_modal.dibujar_cfg(opt.cfg_original)
+            lbl_modal_info.config(text="Vista activa: CFG Original", fg="#1565C0")
+
+        def ver_opt():
+            canvas_modal.dibujar_cfg(opt.cfg_optimizado)
+            lbl_modal_info.config(text="Vista activa: CFG Optimizado", fg="#2E7D32")
+
+        btn_ver_orig = tk.Button(ctrl_bar, text="🔵 CFG Original", command=ver_orig,
+                                 bg="#1565C0", fg="white", font=("Arial", 9, "bold"), padx=10, pady=2)
+        btn_ver_orig.pack(side=tk.LEFT, padx=3)
+
+        btn_ver_opt = tk.Button(ctrl_bar, text="🟢 CFG Optimizado", command=ver_opt,
+                                bg="#2E7D32", fg="white", font=("Arial", 9, "bold"), padx=10, pady=2)
+        btn_ver_opt.pack(side=tk.LEFT, padx=3)
+        lbl_modal_info.pack(side=tk.LEFT, padx=15)
+
+        # Dibujar por defecto el original
+        canvas_modal.dibujar_cfg(opt.cfg_original)
+
+        # --------------------------------------------------------------------
+        # Pestaña 2: Bloques Básicos y Tabla de Sucesores
+        # --------------------------------------------------------------------
+        tab_bb_suc = ttk.Frame(notebook)
+        notebook.add(tab_bb_suc, text=" 🧱 Bloques Básicos y Sucesores ")
+
+        paned_bb = ttk.PanedWindow(tab_bb_suc, orient=tk.HORIZONTAL)
+        paned_bb.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        # Sub-panel izquierdo: Bloques Básicos
+        frame_bb_izq = ttk.LabelFrame(paned_bb, text="Bloques Básicos Identificados (Límites)")
+        paned_bb.add(frame_bb_izq, weight=3)
+
+        txt_bb_list = tk.Text(frame_bb_izq, font=("Consolas", 10), bg="#FAFAFA")
+        sb_bb_l = ttk.Scrollbar(frame_bb_izq, orient=tk.VERTICAL, command=txt_bb_list.yview)
+        txt_bb_list.config(yscrollcommand=sb_bb_l.set)
+        sb_bb_l.pack(side=tk.RIGHT, fill=tk.Y)
+        txt_bb_list.pack(fill=tk.BOTH, expand=True)
+
+        for b in opt.bloques_originales:
+            txt_bb_list.insert(tk.END, b.obtener_texto_bloque() + "\n\n")
+        txt_bb_list.config(state=tk.DISABLED)
+
+        # Sub-panel derecho: Tabla de Sucesores
+        frame_suc_der = ttk.LabelFrame(paned_bb, text="Tabla de Sucesores del GFG")
+        paned_bb.add(frame_suc_der, weight=2)
+
+        cols_s = ("Bloque", "Sucesores")
+        tv_modal_suc = ttk.Treeview(frame_suc_der, columns=cols_s, show="headings")
+        tv_modal_suc.heading("Bloque", text="Bloque")
+        tv_modal_suc.heading("Sucesores", text="Sucesores")
+        tv_modal_suc.column("Bloque", width=110, anchor="center")
+        tv_modal_suc.column("Sucesores", width=220, anchor="w")
+        tv_modal_suc.pack(fill=tk.BOTH, expand=True)
+
+        for row in opt.cfg_original.obtener_tabla_sucesores():
+            tv_modal_suc.insert("", tk.END, values=(row["bloque"], row["sucesores"]))
+
+        # --------------------------------------------------------------------
+        # Pestaña 3: Tabla de Transformaciones Detallada
+        # --------------------------------------------------------------------
+        tab_transf_modal = ttk.Frame(notebook)
+        notebook.add(tab_transf_modal, text=" 📋 Tabla de Transformaciones ")
+
+        cols_t = ("#", "Bloque", "Técnica Aplicada", "Código Original", "Código Optimizado", "Justificación")
+        tv_t_modal = ttk.Treeview(tab_transf_modal, columns=cols_t, show="headings")
+        for c in cols_t:
+            tv_t_modal.heading(c, text=c)
+        tv_t_modal.column("#", width=45, anchor="center")
+        tv_t_modal.column("Bloque", width=75, anchor="center")
+        tv_t_modal.column("Técnica Aplicada", width=220, anchor="w")
+        tv_t_modal.column("Código Original", width=180, anchor="w")
+        tv_t_modal.column("Código Optimizado", width=160, anchor="w")
+        tv_t_modal.column("Justificación", width=300, anchor="w")
+
+        sb_t_y = ttk.Scrollbar(tab_transf_modal, orient=tk.VERTICAL, command=tv_t_modal.yview)
+        sb_t_x = ttk.Scrollbar(tab_transf_modal, orient=tk.HORIZONTAL, command=tv_t_modal.xview)
+        tv_t_modal.configure(yscrollcommand=sb_t_y.set, xscrollcommand=sb_t_x.set)
+        sb_t_y.pack(side=tk.RIGHT, fill=tk.Y)
+        sb_t_x.pack(side=tk.BOTTOM, fill=tk.X)
+        tv_t_modal.pack(fill=tk.BOTH, expand=True)
+
+        for t in opt.transformaciones:
+            tv_t_modal.insert("", tk.END, values=(
+                t.numero, t.bloque, t.tecnica, t.original, t.optimizado, t.justificacion
+            ))
+
+        # --------------------------------------------------------------------
+        # Pestaña 4: Tabla Comparativa CFG (Original vs Optimizado)
+        # --------------------------------------------------------------------
+        tab_comp_modal = ttk.Frame(notebook)
+        notebook.add(tab_comp_modal, text=" 📊 Tabla Comparativa CFG ")
+
+        cols_c = ("Elemento", "CFG Original", "CFG Optimizado", "Optimización Realizada")
+        tv_c_modal = ttk.Treeview(tab_comp_modal, columns=cols_c, show="headings")
+        for c in cols_c:
+            tv_c_modal.heading(c, text=c)
+        tv_c_modal.column("Elemento", width=220, anchor="w")
+        tv_c_modal.column("CFG Original", width=160, anchor="center")
+        tv_c_modal.column("CFG Optimizado", width=160, anchor="center")
+        tv_c_modal.column("Optimización Realizada", width=360, anchor="w")
+        tv_c_modal.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        for row in opt.obtener_tabla_comparativa_cfg():
+            tv_c_modal.insert("", tk.END, values=(
+                row["elemento"], row["cfg_original"], row["cfg_optimizado"], row["optimizacion"]
+            ))
+
+        # --------------------------------------------------------------------
+        # Pestaña 5: Comparativa IR (before.ir vs after.ir)
+        # --------------------------------------------------------------------
+        tab_diff_modal = ttk.Frame(notebook)
+        notebook.add(tab_diff_modal, text=" ⚡ IR Antes / Después ")
+
+        txt_ir_side = tk.Text(tab_diff_modal, font=("Consolas", 10), bg="#FAFAFA")
+        sb_ir_s = ttk.Scrollbar(tab_diff_modal, orient=tk.VERTICAL, command=txt_ir_side.yview)
+        txt_ir_side.config(yscrollcommand=sb_ir_s.set)
+        sb_ir_s.pack(side=tk.RIGHT, fill=tk.Y)
+        txt_ir_side.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        txt_ir_side.insert(tk.END, f"{'=== CÓDIGO ORIGINAL (before.ir) ===':<45} | {'=== CÓDIGO OPTIMIZADO (after.ir) ==='}\n")
+        txt_ir_side.insert(tk.END, "=" * 95 + "\n")
+        n_orig = len(opt.instrucciones_originales)
+        n_opt = len(opt.instrucciones_optimizadas)
+        for idx in range(max(n_orig, n_opt)):
+            s_or = opt.instrucciones_originales[idx].to_ir_tuple() if idx < n_orig else ""
+            s_op = opt.instrucciones_optimizadas[idx].to_ir_tuple() if idx < n_opt else ""
+            txt_ir_side.insert(tk.END, f"{s_or:<48} | {s_op}\n")
+        txt_ir_side.config(state=tk.DISABLED)
+
+        # --------------------------------------------------------------------
+        # Pestaña 6: Reporte Completo y Conclusiones
+        # --------------------------------------------------------------------
+        tab_rep_modal = ttk.Frame(notebook)
+        notebook.add(tab_rep_modal, text=" 📑 Reporte y Conclusiones ")
+
+        txt_rep_full = tk.Text(tab_rep_modal, font=("Consolas", 10), bg="#FFFFFF")
+        sb_rep = ttk.Scrollbar(tab_rep_modal, orient=tk.VERTICAL, command=txt_rep_full.yview)
+        txt_rep_full.config(yscrollcommand=sb_rep.set)
+        sb_rep.pack(side=tk.RIGHT, fill=tk.Y)
+        txt_rep_full.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        reporte = OptimizationReport(opt)
+        txt_rep_full.insert(tk.END, reporte.generar_reporte_texto())
+        txt_rep_full.config(state=tk.DISABLED)
+
+        # --------------------------------------------------------------------
+        # Barra Inferior: Acciones y Exportaciones
+        # --------------------------------------------------------------------
+        bot_bar = tk.Frame(ventana, bg="#F5F5F5", padx=15, pady=8)
+        bot_bar.pack(fill=tk.X)
+
+        def guardar_before_ir():
+            ruta = filedialog.asksaveasfilename(
+                title="Guardar before.ir", defaultextension=".ir",
+                initialfile="before.ir",
+                filetypes=[("Código Intermedio (*.ir)", "*.ir"), ("Todos los archivos", "*.*")]
+            )
+            if ruta:
+                try:
+                    with open(ruta, "w", encoding="utf-8") as f:
+                        for i in opt.instrucciones_originales:
+                            f.write(i.to_ir_tuple() + "\n")
+                    messagebox.showinfo("Guardado", f"before.ir guardado en:\n{ruta}")
+                except Exception as ex:
+                    messagebox.showerror("Error", str(ex))
+
+        def guardar_after_ir():
+            ruta = filedialog.asksaveasfilename(
+                title="Guardar after.ir", defaultextension=".ir",
+                initialfile="after.ir",
+                filetypes=[("Código Intermedio (*.ir)", "*.ir"), ("Todos los archivos", "*.*")]
+            )
+            if ruta:
+                try:
+                    with open(ruta, "w", encoding="utf-8") as f:
+                        for i in opt.instrucciones_optimizadas:
+                            f.write(i.to_ir_tuple() + "\n")
+                    messagebox.showinfo("Guardado", f"after.ir guardado en:\n{ruta}")
+                except Exception as ex:
+                    messagebox.showerror("Error", str(ex))
+
+        def guardar_reporte():
+            ruta = filedialog.asksaveasfilename(
+                title="Guardar Reporte de Optimización", defaultextension=".txt",
+                initialfile="reporte_optimizacion_u3.txt",
+                filetypes=[("Reporte Texto (*.txt)", "*.txt"), ("Todos los archivos", "*.*")]
+            )
+            if ruta:
+                try:
+                    with open(ruta, "w", encoding="utf-8") as f:
+                        f.write(reporte.generar_reporte_texto() + "\n")
+                    messagebox.showinfo("Guardado", f"Reporte guardado en:\n{ruta}")
+                except Exception as ex:
+                    messagebox.showerror("Error", str(ex))
+
+        def copiar_after_ir():
+            texto = "\n".join(i.to_ir_tuple() for i in opt.instrucciones_optimizadas)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(texto)
+            messagebox.showinfo("Copiado", "¡Código after.ir copiado al portapapeles!")
+
+        btn_g_b = tk.Button(bot_bar, text="💾 Guardar before.ir", command=guardar_before_ir,
+                            bg="#1565C0", fg="white", font=("Arial", 9, "bold"), padx=8, pady=3)
+        btn_g_b.pack(side=tk.LEFT, padx=3)
+
+        btn_g_a = tk.Button(bot_bar, text="💾 Guardar after.ir", command=guardar_after_ir,
+                            bg="#2E7D32", fg="white", font=("Arial", 9, "bold"), padx=8, pady=3)
+        btn_g_a.pack(side=tk.LEFT, padx=3)
+
+        btn_g_r = tk.Button(bot_bar, text="📄 Guardar Reporte (.txt)", command=guardar_reporte,
+                            bg="#6A1B9A", fg="white", font=("Arial", 9, "bold"), padx=8, pady=3)
+        btn_g_r.pack(side=tk.LEFT, padx=3)
+
+        btn_c_a = tk.Button(bot_bar, text="📋 Copiar after.ir", command=copiar_after_ir,
+                            bg="#00838F", fg="white", font=("Arial", 9, "bold"), padx=8, pady=3)
+        btn_c_a.pack(side=tk.LEFT, padx=3)
+
+        btn_close = tk.Button(bot_bar, text="Cerrar", command=ventana.destroy,
+                              bg="#757575", fg="white", font=("Arial", 9), padx=10, pady=3)
+        btn_close.pack(side=tk.RIGHT, padx=3)
 
 if __name__ == "__main__":
     root = tk.Tk()

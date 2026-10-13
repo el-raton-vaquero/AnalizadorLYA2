@@ -754,6 +754,10 @@ class IRGenerator:
         Devuelve: (instrucciones, postfijas, texto_ir)
         """
         self.reset()
+        if isinstance(codigo_o_ast, tuple):
+            # Desenvolver si se pasa la tupla (codigo, parser, arbol_ast) de _parsear()
+            codigo_o_ast = codigo_o_ast[2] if len(codigo_o_ast) >= 3 else codigo_o_ast[0]
+
         if isinstance(codigo_o_ast, str):
             lexer = LexerCPP(codigo_o_ast)
             tokens = lexer.tokenizar()
