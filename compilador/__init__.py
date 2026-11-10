@@ -1,9 +1,6 @@
-"""
-Paquete principal del compilador C++.
-Materia: Lenguajes y Autómatas II.
-"""
 
 from . import ir
 from . import opt
+from . import codegen
 
-__all__ = ["ir", "opt"]
+__all__ = ["ir", "opt", "codegen"]

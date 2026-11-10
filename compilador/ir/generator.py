@@ -1,34 +1,10 @@
-"""
-
-  COMPILADOR - GENERADOR DE CÓDIGO INTERMEDIO (IR)
-  Materia: Lenguajes y Autómatas II
-  Lenguaje Fuente Analizado: C++
-  Implementación: Python 3
-
-
-Este módulo implementa el Generador de Código Intermedio (IR) a partir del análisis
-de código fuente en C++. Es completamente autónomo y autosuficiente.
-
-Genera cuádruplas en el formato requerido:
-  #N (operador, argumento1, argumento2, resultado)
-donde:
-  - Operadores aritméticos: *, /, %, +, -, neg
-  - Asignación: =
-  - Relacionales: >, <, >=, <=, ==, !=
-  - Control de flujo: IF_FALSE, GOTO, LABEL
-  - Temporales: t1, t2, t3, ...
-  - Etiquetas: L1, L2, L3, ...
-"""
 
 import re
 import sys
 import os
 
 
-#  1. REPRESENTACIÓN DE TOKENS Y ÁRBOL SINTÁCTICO ABSTRACTO (AST)
-
 class Token:
-    """Representa un token léxico identificado en el código fuente C++."""
     def __init__(self, tipo, valor, pos_inicio=0, pos_fin=0, linea=1):
         self.type = tipo
         self.value = valor
@@ -41,10 +17,9 @@ class Token:
 
 
 class NodoAST:
-    """Nodo genérico para la construcción del Árbol Sintáctico Abstracto (AST)."""
     def __init__(self, etiqueta, valor=""):
-        self.etiqueta = etiqueta  # Ej. 'BinOp', 'Num', 'Id', 'Assign', 'Estructura de Control'
-        self.valor = valor        # Ej. '+', '*', '5', 'x', 'if'
+        self.etiqueta = etiqueta
+        self.valor = valor
         self.hijos = []
         self.linea = 1
         self.tipo = None
@@ -57,26 +32,22 @@ class NodoAST:
         return f"NodoAST({self.etiqueta!r}, {self.valor!r}, hijos={len(self.hijos)})"
 
 
-
-#  2. ANALIZADOR LÉXICO (LEXER) PARA C++
-
-
 class LexerCPP:
-    """Analizador léxico enfocado en la sintaxis de C++."""
     def __init__(self, codigo):
         self.codigo = codigo
         self.tokens = []
 
-        # Especificación de reglas léxicas mediante expresiones regulares
         reglas = [
             ('COMENTARIO_BLOQUE', r'/\*[\s\S]*?\*/'),
             ('COMENTARIO_LINEA',  r'//[^\n]*'),
-            ('RESERVADA', r'\b(int|float|double|char|void|bool|string|if|else|while|for|return|cout|cin|endl|true|false)\b'),
+            ('DIRECTIVA', r'#[^\n]*'),
+            ('RESERVADA', r'\b(int|float|double|char|void|bool|string|if|else|while|for|return|cout|cin|endl|true|false|class|struct|public|private|protected|static|const|inline|virtual|using|namespace)\b'),
             ('NUMERO',    r'\d+(\.\d+)?'),
             ('IDENTIFICADOR', r'[A-Za-z_][A-Za-z0-9_]*'),
             ('CADENA',    r'".*?"'),
             ('OP_INCDEC', r'\+\+|--'),
             ('OP_FLUJO',  r'<<|>>'),
+            ('OP_RESOLUCION', r'::'),
             ('OP_REL',    r'==|!=|<=|>=|<|>'),
             ('OP_LOGICO', r'&&|\|\||!'),
             ('OP_ARIT',   r'[+\-*/%]'),
@@ -108,29 +79,13 @@ class LexerCPP:
             if tipo in ('ESPACIO', 'COMENTARIO_BLOQUE', 'COMENTARIO_LINEA'):
                 continue
             elif tipo == 'ERROR':
-                # Carácter no reconocido, se ignora o registra
                 continue
             else:
                 self.tokens.append(Token(tipo, valor, pos, match.end(), linea))
         return self.tokens
 
 
-
-#  3. PARSER SINTÁCTICO DE C++ CON PRECEDENCIA DE OPERADORES
-
 class ParserCPP:
-    """
-    Analizador sintáctico para C++ que genera el AST respetando la
-    precedencia formal de operadores:
-      1. Paréntesis y llamadas
-      2. Unarios (+, -, !)
-      3. Multiplicativos (*, /, %)
-      4. Aditivos (+, -)
-      5. Relacionales (<, >, <=, >=)
-      6. Igualdad (==, !=)
-      7. Lógicos (&&, luego ||)
-      8. Asignación (=)
-    """
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
@@ -152,7 +107,6 @@ class ParserCPP:
         return None
 
     def parse(self):
-        """Parsea un programa completo o secuencia de instrucciones C++."""
         nodo_raiz = NodoAST("Programa")
         while self.actual():
             pos_antes = self.pos
@@ -160,7 +114,7 @@ class ParserCPP:
             if nodo:
                 nodo_raiz.agregar_hijo(nodo)
             if self.pos == pos_antes:
-                self.avanzar()  # Evitar bucles infinitos en errores sintácticos
+                self.avanzar()
         return nodo_raiz
 
     def parse_instruccion_o_declaracion(self):
@@ -168,23 +122,56 @@ class ParserCPP:
         if not tok:
             return None
 
-        # Bloque con llaves { ... }
+        if tok.type == 'DIRECTIVA':
+            self.avanzar()
+            return NodoAST("Directiva", tok.value)
+
+        if tok.type == 'RESERVADA' and tok.value == 'using':
+            while self.actual() and self.actual().type != 'PUNTOCOMA':
+                self.avanzar()
+            self.coincidir('PUNTOCOMA')
+            return None
+
         if tok.type == 'LLAVE_IZQ':
             return self.parse_bloque()
 
-        # Estructura if / else
+        if tok.type == 'RESERVADA' and tok.value in ('class', 'struct'):
+            self.avanzar()
+            nombre = "Anonima"
+            if self.actual() and self.actual().type == 'IDENTIFICADOR':
+                nombre = self.avanzar().value
+            nodo_clase = NodoAST("Clase", nombre)
+            if self.coincidir('LLAVE_IZQ'):
+                while self.actual() and self.actual().type != 'LLAVE_DER':
+                    if self.actual().type == 'DIRECTIVA':
+                        self.avanzar()
+                        continue
+                    if self.actual().type == 'RESERVADA' and self.actual().value in ('public', 'private', 'protected'):
+                        self.avanzar()
+                        self.coincidir('TERNARIO')
+                        continue
+                    if self.actual().type == 'PUNTOCOMA':
+                        self.avanzar()
+                        continue
+                    pos_antes = self.pos
+                    miembro = self.parse_instruccion_o_declaracion()
+                    if miembro:
+                        nodo_clase.agregar_hijo(miembro)
+                    if self.pos == pos_antes:
+                        self.avanzar()
+                self.coincidir('LLAVE_DER')
+            self.coincidir('PUNTOCOMA')
+            return nodo_clase
+
         if tok.type == 'RESERVADA' and tok.value == 'if':
             return self.parse_if()
 
-        # Ciclo while
         if tok.type == 'RESERVADA' and tok.value == 'while':
             return self.parse_while()
 
-        # Ciclo for
         if tok.type == 'RESERVADA' and tok.value == 'for':
             return self.parse_for()
 
-        # Instrucción return
         if tok.type == 'RESERVADA' and tok.value == 'return':
             self.avanzar()
             nodo_ret = NodoAST("Instrucción", "return")
@@ -193,25 +180,38 @@ class ParserCPP:
             self.coincidir('PUNTOCOMA')
             return nodo_ret
 
-        # cout << ... ;
+        if tok.type == 'IDENTIFICADOR' and tok.value == 'std':
+            if self.pos + 2 < len(self.tokens) and self.tokens[self.pos + 1].type == 'OP_RESOLUCION':
+                if self.tokens[self.pos + 2].value == 'cout':
+                    self.avanzar()
+                    self.avanzar()
+                    return self.parse_cout()
+                elif self.tokens[self.pos + 2].value == 'cin':
+                    self.avanzar()
+                    self.avanzar()
+                    return self.parse_cin()
+
         if tok.type == 'RESERVADA' and tok.value == 'cout':
             return self.parse_cout()
 
-        # cin >> ... ;
         if tok.type == 'RESERVADA' and tok.value == 'cin':
             return self.parse_cin()
 
-        # Declaración de variable o función: tipo id ...
+        while self.actual() and self.actual().type == 'RESERVADA' and self.actual().value in ('static', 'const', 'inline', 'virtual'):
+            self.avanzar()
+
+        tok = self.actual()
+        if not tok:
+            return None
+
         if tok.type == 'RESERVADA' and tok.value in ('int', 'float', 'double', 'char', 'void', 'bool', 'string'):
             tipo_dato = self.avanzar().value
             if self.actual() and self.actual().type == 'IDENTIFICADOR':
                 nombre_id = self.avanzar().value
 
-                # Si sigue '(', es definición de función: int suma(int a, int b) { ... }
                 if self.actual() and self.actual().type == 'PAR_IZQ':
                     return self.parse_funcion(tipo_dato, nombre_id)
 
-                # Declaración de variable: int x = expr; ó int x;
                 nodo_decl = NodoAST("Declaración Local", nombre_id)
                 nodo_decl.tipo = tipo_dato
                 if self.coincidir('ASIGNACION'):
@@ -222,7 +222,6 @@ class ParserCPP:
                 self.coincidir('PUNTOCOMA')
                 return nodo_decl
 
-        # Expresión general o asignación directa (ej. x = 3 + 4 * 2;)
         expr = self.parse_expresion()
         self.coincidir('PUNTOCOMA')
         return expr
@@ -241,7 +240,7 @@ class ParserCPP:
         return nodo_bloque
 
     def parse_if(self):
-        self.avanzar()  # consume 'if'
+        self.avanzar()
         self.coincidir('PAR_IZQ')
         cond = self.parse_expresion()
         self.coincidir('PAR_DER')
@@ -255,7 +254,7 @@ class ParserCPP:
         nodo_if.agregar_hijo(cuerpo_then)
 
         if self.actual() and self.actual().type == 'RESERVADA' and self.actual().value == 'else':
-            self.avanzar()  # consume 'else'
+            self.avanzar()
             nodo_else = NodoAST("Estructura de Control", "else")
             cuerpo_else = self.parse_instruccion_o_declaracion()
             nodo_else.agregar_hijo(cuerpo_else)
@@ -264,7 +263,7 @@ class ParserCPP:
         return nodo_if
 
     def parse_while(self):
-        self.avanzar()  # consume 'while'
+        self.avanzar()
         self.coincidir('PAR_IZQ')
         cond = self.parse_expresion()
         self.coincidir('PAR_DER')
@@ -279,10 +278,9 @@ class ParserCPP:
         return nodo_while
 
     def parse_for(self):
-        self.avanzar()  # consume 'for'
+        self.avanzar()
         self.coincidir('PAR_IZQ')
 
-        # Inicialización
         nodo_for = NodoAST("Ciclo", "for")
         if self.actual() and self.actual().type != 'PUNTOCOMA':
             init_nodo = self.parse_expresion()
@@ -291,7 +289,6 @@ class ParserCPP:
             nodo_for.agregar_hijo(c_init)
         self.coincidir('PUNTOCOMA')
 
-        # Condición
         if self.actual() and self.actual().type != 'PUNTOCOMA':
             cond_nodo = self.parse_expresion()
             c_cond = NodoAST("Condición")
@@ -299,7 +296,6 @@ class ParserCPP:
             nodo_for.agregar_hijo(c_cond)
         self.coincidir('PUNTOCOMA')
 
-        # Actualización
         if self.actual() and self.actual().type != 'PAR_DER':
             upd_nodo = self.parse_expresion()
             c_upd = NodoAST("Actualización")
@@ -312,11 +308,16 @@ class ParserCPP:
         return nodo_for
 
     def parse_cout(self):
-        self.avanzar()  # consume 'cout'
+        self.avanzar()
         nodo_cout = NodoAST("Salida por Consola", "cout")
         while self.actual() and self.actual().type == 'OP_FLUJO' and self.actual().value == '<<':
-            self.avanzar()  # consume '<<'
+            self.avanzar()
             if self.actual() and self.actual().type == 'RESERVADA' and self.actual().value == 'endl':
+                self.avanzar()
+                nodo_cout.agregar_hijo(NodoAST("Cadena", '"\\n"'))
+            elif self.actual() and self.actual().value == 'std' and self.pos + 2 < len(self.tokens) and self.tokens[self.pos + 1].type == 'OP_RESOLUCION' and self.tokens[self.pos + 2].value == 'endl':
+                self.avanzar()
+                self.avanzar()
                 self.avanzar()
                 nodo_cout.agregar_hijo(NodoAST("Cadena", '"\\n"'))
             else:
@@ -325,10 +326,10 @@ class ParserCPP:
         return nodo_cout
 
     def parse_cin(self):
-        self.avanzar()  # consume 'cin'
+        self.avanzar()
         nodo_cin = NodoAST("Entrada por Consola", "cin")
         while self.actual() and self.actual().type == 'OP_FLUJO' and self.actual().value == '>>':
-            self.avanzar()  # consume '>>'
+            self.avanzar()
             tok = self.coincidir('IDENTIFICADOR')
             if tok:
                 nodo_cin.agregar_hijo(NodoAST("Id", tok.value))
@@ -340,7 +341,6 @@ class ParserCPP:
         nodo_func = NodoAST("Función", nombre)
         nodo_func.tipo = tipo_ret
 
-        # Parámetros (ej. int a, int b)
         while self.actual() and self.actual().type != 'PAR_DER':
             if self.actual().type == 'RESERVADA':
                 t_param = self.avanzar().value
@@ -360,9 +360,7 @@ class ParserCPP:
         nodo_func.agregar_hijo(cuerpo)
         return nodo_func
 
-   
-    # Jerarquía de Expresiones (Precedencia)
-    
+
     def parse_expresion(self):
         return self.parse_asignacion()
 
@@ -472,53 +470,49 @@ class ParserCPP:
         if not tok:
             return NodoAST("Error", "EOF")
 
-        # Paréntesis (expr)
         if tok.type == 'PAR_IZQ':
             self.avanzar()
             expr = self.parse_expresion()
             self.coincidir('PAR_DER')
             return expr
 
-        # Número
         if tok.type == 'NUMERO':
             self.avanzar()
             return NodoAST("Num", tok.value)
 
-        # Cadena
         if tok.type == 'CADENA':
             self.avanzar()
             return NodoAST("Cadena", tok.value)
 
-        # Booleanos
         if tok.type == 'RESERVADA' and tok.value in ('true', 'false'):
             self.avanzar()
             return NodoAST("Bool", tok.value)
 
-        # Identificador (variable, arreglo o llamada)
         if tok.type == 'IDENTIFICADOR':
-            self.avanzar()
-            nodo_base = NodoAST("Id", tok.value)
+            nombre_id = self.avanzar().value
+            while self.actual() and self.actual().type == 'OP_RESOLUCION':
+                self.avanzar()
+                if self.actual() and self.actual().type in ('IDENTIFICADOR', 'RESERVADA'):
+                    nombre_id = f"{nombre_id}::{self.avanzar().value}"
+            nodo_base = NodoAST("Id", nombre_id)
 
-            # Acceso a arreglo: a[idx]
             if self.actual() and self.actual().type == 'COR_IZQ':
                 self.avanzar()
                 idx = self.parse_expresion()
                 self.coincidir('COR_DER')
-                nodo_arr = NodoAST("AccesoArreglo", tok.value)
+                nodo_arr = NodoAST("AccesoArreglo", nombre_id)
                 nodo_arr.agregar_hijo(idx)
                 nodo_base = nodo_arr
 
-            # Llamada a función: foo(arg1, arg2)
             elif self.actual() and self.actual().type == 'PAR_IZQ':
                 self.avanzar()
-                nodo_call = NodoAST("Llamada", tok.value)
+                nodo_call = NodoAST("Llamada", nombre_id)
                 while self.actual() and self.actual().type != 'PAR_DER':
                     nodo_call.agregar_hijo(self.parse_expresion())
                     self.coincidir('COMA')
                 self.coincidir('PAR_DER')
                 nodo_base = nodo_call
 
-            # Post-incremento o decremento: x++, x--
             if self.actual() and self.actual().type == 'OP_INCDEC':
                 op_inc = self.avanzar()
                 nodo_inc = NodoAST("PostIncDec", op_inc.value)
@@ -527,20 +521,11 @@ class ParserCPP:
 
             return nodo_base
 
-        # Token inesperado
         self.avanzar()
         return NodoAST("Error", tok.value)
 
 
-
-#  4. CLASE CUÁDRUPLO
-
-
 class Cuadruplo:
-    """
-    Representa una instrucción de código intermedio en formato cuádruplo:
-      #N (operador, argumento1, argumento2, resultado)
-    """
     def __init__(self, numero, op, arg1="", arg2="", resultado=""):
         self.numero = numero
         self.op = str(op) if op is not None else ""
@@ -549,20 +534,12 @@ class Cuadruplo:
         self.resultado = str(resultado) if resultado is not None and resultado != "" else ""
 
     def to_ir_tuple(self):
-        """
-        Formato estándar de cuádruplos:
-          #1 (*, 4, 2, t1)
-          #2 (+, 3, t1, t2)
-          #3 (=, t2, , x)
-        """
         return f"#{self.numero} ({self.op}, {self.arg1}, {self.arg2}, {self.resultado})"
 
     def to_triplo(self):
-        """Formato triplo sin número de instrucción."""
         return f"({self.op}, {self.arg1}, {self.arg2}, {self.resultado})"
 
     def to_3ac(self):
-        """Representación en Código de Tres Direcciones (3AC) equivalente."""
         op_upper = self.op.upper()
         a1 = self.arg1
         a2 = self.arg2
@@ -608,15 +585,7 @@ class Cuadruplo:
         return f"Cuadruplo({self.numero}, {self.op!r}, {self.arg1!r}, {self.arg2!r}, {self.resultado!r})"
 
 
-
-#  5. GENERADOR DE CÓDIGO INTERMEDIO (IR GENERATOR)
-
-
 class IRGenerator:
-    """
-    Genera instrucciones intermedias (cuádruplos) a partir del AST de C++.
-    
-    """
     def __init__(self):
         self.instrucciones = []
         self.temp_count = 0
@@ -630,27 +599,20 @@ class IRGenerator:
         self.postfijas.clear()
 
     def nuevo_temporal(self):
-        """Genera temporales secuenciales t1, t2, t3..."""
         self.temp_count += 1
         return f"t{self.temp_count}"
 
     def nueva_etiqueta(self):
-        """Genera etiquetas secuenciales L1, L2, L3..."""
         self.label_count += 1
         return f"L{self.label_count}"
 
     def emitir(self, op, arg1="", arg2="", resultado=""):
-        """Agrega un nuevo cuádruplo numerado a la secuencia."""
         num = len(self.instrucciones) + 1
         c = Cuadruplo(num, op, arg1, arg2, resultado)
         self.instrucciones.append(c)
         return c
 
     def obtener_tokens_postfija(self, nodo):
-        """
-        Recorre el AST de una expresión en postorden devolviendo una lista
-        de tokens en notación postfija (RPN).
-        """
         if nodo is None:
             return []
 
@@ -701,7 +663,6 @@ class IRGenerator:
             return res
 
     def expr_a_texto(self, nodo):
-        """Reconstruye una expresión infija simple para mostrar junto a la postfija."""
         if nodo is None:
             return ""
         et = getattr(nodo, "etiqueta", "")
@@ -730,7 +691,6 @@ class IRGenerator:
         return str(val)
 
     def registrar_postfija(self, nodo_expr):
-        """Registra la conversión infija -> postfija de una expresión si tiene contenido."""
         if nodo_expr is None:
             return
         tokens = self.obtener_tokens_postfija(nodo_expr)
@@ -744,18 +704,10 @@ class IRGenerator:
                 "postfija": texto_post
             })
 
-    # ========================================================================
-    #  GENERACIÓN DE CÓDIGO INTERMEDIO (Visitor)
-    # ========================================================================
-    
+
     def generar(self, codigo_o_ast):
-        """
-        Punto de entrada principal. Acepta una cadena con código fuente C++ o un nodo AST.
-        Devuelve: (instrucciones, postfijas, texto_ir)
-        """
         self.reset()
         if isinstance(codigo_o_ast, tuple):
-            # Desenvolver si se pasa la tupla (codigo, parser, arbol_ast) de _parsear()
             codigo_o_ast = codigo_o_ast[2] if len(codigo_o_ast) >= 3 else codigo_o_ast[0]
 
         if isinstance(codigo_o_ast, str):
@@ -771,16 +723,12 @@ class IRGenerator:
         return self.instrucciones, self.postfijas, self.obtener_texto_ir()
 
     def obtener_texto_ir(self):
-        """Retorna el código completo"""
         return "\n".join(inst.to_ir_tuple() for inst in self.instrucciones)
 
     def obtener_texto_3ac(self):
-        """Retorna la representación equivalente en Código de Tres Direcciones."""
         return "\n".join(inst.to_3ac() for inst in self.instrucciones)
 
-    
-    # Patrón Visitor sobre el AST
-    
+
     def visitar(self, nodo):
         if nodo is None:
             return
@@ -790,6 +738,13 @@ class IRGenerator:
         if et == "Programa":
             for hijo in nodo.hijos:
                 self.visitar(hijo)
+
+        elif et == "Clase":
+            for hijo in nodo.hijos:
+                self.visitar(hijo)
+
+        elif et == "Directiva":
+            pass
 
         elif et == "Función":
             nombre_func = nodo.valor
@@ -806,7 +761,8 @@ class IRGenerator:
                     expr_nodo = hijo.hijos[0]
                     self.registrar_postfija(expr_nodo)
                     val = self.visitar_expr(expr_nodo)
-                    self.emitir("=", val, "", nombre_var)
+                    if val != nombre_var:
+                        self.emitir("=", val, "", nombre_var)
 
         elif et == "Bloque":
             for hijo in nodo.hijos:
@@ -831,13 +787,13 @@ class IRGenerator:
                 else:
                     self.emitir("return", "", "", "")
 
-        elif et == "Salida por Consola":  # cout
+        elif et == "Salida por Consola":
             for hijo in nodo.hijos:
                 self.registrar_postfija(hijo)
                 val = self.visitar_expr(hijo)
                 self.emitir("print", val, "", "")
 
-        elif et == "Entrada por Consola":  # cin
+        elif et == "Entrada por Consola":
             for hijo in nodo.hijos:
                 var_dest = getattr(hijo, "valor", "x")
                 self.emitir("read", "", "", var_dest)
@@ -850,20 +806,8 @@ class IRGenerator:
             for hijo in getattr(nodo, "hijos", []):
                 self.visitar(hijo)
 
-    
-    # Control de Flujo (if-else, while, for)
-    
+
     def visitar_if(self, nodo):
-        """
-        Genera el patrón if / else:
-          #1 (condición relacional, arg1, arg2, t1)
-          #2 (IF_FALSE, t1, , L1)
-          #3 ... rama then ...
-          #4 (GOTO, , , L2)
-          #5 (LABEL, , , L1)
-          #6 ... rama else ...
-          #7 (LABEL, , , L2)
-        """
         cond_nodo = None
         then_nodo = None
         else_nodo = None
@@ -876,11 +820,9 @@ class IRGenerator:
             elif then_nodo is None and hijo.etiqueta != "Condición":
                 then_nodo = hijo
 
-        # 1. Evaluar la condición
         cond_res = self.visitar_expr(cond_nodo) if cond_nodo else "true"
 
         if else_nodo is not None:
-            # Caso con rama else
             label_else = self.nueva_etiqueta()
             label_fin = self.nueva_etiqueta()
 
@@ -893,7 +835,6 @@ class IRGenerator:
                 self.visitar(h)
             self.emitir("LABEL", "", "", label_fin)
         else:
-            # Caso if simple (sin else)
             label_fin = self.nueva_etiqueta()
             self.emitir("IF_FALSE", cond_res, "", label_fin)
             if then_nodo:
@@ -901,15 +842,6 @@ class IRGenerator:
             self.emitir("LABEL", "", "", label_fin)
 
     def visitar_while(self, nodo):
-        """
-        Genera el ciclo while:
-          L1:
-          t1 = condición
-          (IF_FALSE, t1, , L2)
-          ... cuerpo ...
-          (GOTO, , , L1)
-          L2:
-        """
         cond_nodo = None
         cuerpo_nodo = None
 
@@ -931,18 +863,6 @@ class IRGenerator:
         self.emitir("LABEL", "", "", label_fin)
 
     def visitar_for(self, nodo):
-        """
-        Genera el ciclo for:
-          [inicialización]
-          L_cond:
-          t1 = condición
-          (IF_FALSE, t1, , L_fin)
-          [cuerpo]
-          L_upd:
-          [actualización]
-          (GOTO, , , L_cond)
-          L_fin:
-        """
         init_nodo = None
         cond_nodo = None
         upd_nodo = None
@@ -981,15 +901,7 @@ class IRGenerator:
         self.emitir("GOTO", "", "", label_cond)
         self.emitir("LABEL", "", "", label_fin)
 
-    # ------------------------------------------------------------------------
-    # Expresiones Aritméticas, Lógicas y Asignaciones
-    # ------------------------------------------------------------------------
     def visitar_expr(self, nodo):
-        """
-        Evalúa recursivamente un nodo de expresión en el AST y genera
-        las cuádruplas necesarias, retornando el nombre del operando resultante
-        (literal, identificador o temporal t1, t2...).
-        """
         if nodo is None:
             return ""
 
@@ -997,18 +909,15 @@ class IRGenerator:
         val = getattr(nodo, "valor", "")
         hijos = getattr(nodo, "hijos", [])
 
-        # Literales y variables simples
         if et in ("Num", "Id", "Bool", "Cadena"):
             return str(val)
 
-        # Acceso a arreglos a[idx]
         elif et == "AccesoArreglo":
             idx = self.visitar_expr(hijos[0]) if hijos else "0"
             t = self.nuevo_temporal()
             self.emitir("[]", str(val), idx, t)
             return t
 
-        # Operaciones Binarias (+, -, *, /, %, <, >, <=, >=, ==, !=, &&, ||)
         elif et == "BinOp":
             izq = self.visitar_expr(hijos[0]) if len(hijos) > 0 else ""
             der = self.visitar_expr(hijos[1]) if len(hijos) > 1 else ""
@@ -1016,7 +925,6 @@ class IRGenerator:
             self.emitir(str(val), izq, der, t)
             return t
 
-        # Operaciones Unarias (negación aritmética -, negación lógica !)
         elif et == "UnOp":
             operando = self.visitar_expr(hijos[0]) if len(hijos) > 0 else ""
             t = self.nuevo_temporal()
@@ -1024,7 +932,6 @@ class IRGenerator:
             self.emitir(op, operando, "", t)
             return t
 
-        # Asignación (dest = expr)
         elif et == "Assign":
             der = self.visitar_expr(hijos[1]) if len(hijos) > 1 else ""
             izq_nodo = hijos[0] if len(hijos) > 0 else None
@@ -1037,7 +944,6 @@ class IRGenerator:
                 self.emitir("=", der, "", dest)
                 return dest
 
-        # Post-incremento o decremento (x++, x--)
         elif et == "PostIncDec":
             var_nom = getattr(hijos[0], "valor", "x") if hijos else "x"
             op_arit = "+" if str(val) == "++" else "-"
@@ -1046,7 +952,6 @@ class IRGenerator:
             self.emitir("=", t, "", var_nom)
             return var_nom
 
-        # Operador Ternario (cond ? entonces : sino)
         elif et == "Ternario":
             cond_res = self.visitar_expr(hijos[0]) if len(hijos) > 0 else "true"
             l_else = self.nueva_etiqueta()
@@ -1063,7 +968,6 @@ class IRGenerator:
             self.emitir("LABEL", "", "", l_fin)
             return res_temp
 
-        # Llamada a funciones: func(arg1, arg2)
         elif et == "Llamada":
             args = [self.visitar_expr(h) for h in hijos]
             for a in args:
@@ -1075,21 +979,12 @@ class IRGenerator:
         elif hijos:
             return self.visitar_expr(hijos[0])
 
+        if str(val) in ("endl", "std::endl"):
+            return '"\\n"'
         return str(val)
 
 
-
-#  6. FUNCIÓN FACADE DE GENERACIÓN COMPLETA
-
-
 def generar_ir(codigo_o_ast):
-    """
-    Función de alto nivel que genera el código intermedio a partir de:
-      - Una cadena con código fuente en C++ (ej. "x = 3 + 4 * 2;")
-      - O directamente un nodo AST previamente construido.
-
-    Retorna: (lista_instrucciones, lista_postfijas, texto_ir)
-    """
     if isinstance(codigo_o_ast, str):
         lexer = LexerCPP(codigo_o_ast)
         tokens = lexer.tokenizar()
@@ -1101,11 +996,6 @@ def generar_ir(codigo_o_ast):
     generador = IRGenerator()
     return generador.generar(ast)
 
-# ============================================================================
-#  EJECUCIÓN DIRECTA
-#  - Sin argumentos: Inicia la Interfaz Gráfica (GUI) para evaluación interactiva
-#  - Con argumentos: Modo CLI para compilar archivos .cpp a .ir
-# ============================================================================
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Iniciando la Interfaz Gráfica (GUI) del Compilador...")

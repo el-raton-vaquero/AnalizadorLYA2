@@ -1,0 +1,27 @@
+============================================================
+       EVIDENCIA DE EJECUCIÓN DE CÓDIGO OBJETO (.ASM)       
+============================================================
+• Estado:                 EXITOSO (0 ERRORES)
+• Código de retorno (EAX): 0
+• Instrucciones simuladas: 64
+
+--- SALIDA EN CONSOLA (STDOUT) ---
+  [STDOUT] 45
+
+--- ESTADO FINAL DE REGISTROS DE LA CPU ---
+  EAX  =          0  (0x00000000)
+  EBX  =         45  (0x0000002D)
+  ECX  =          4  (0x00000004)
+  EDX  =          0  (0x00000000)
+  ESI  =          0  (0x00000000)
+  EDI  =          0  (0x00000000)
+  EBP  = 2147479552  (0x7FFFF000)
+  ESP  = 2147479552  (0x7FFFF000)
+
+--- ESTADO FINAL DE VARIABLES EN MEMORIA (.BSS) ---
+  a            = 5
+  b            = 10
+  c            = 15
+  i            = 4
+  total        = 45
+============================================================

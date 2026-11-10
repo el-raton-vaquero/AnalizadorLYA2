@@ -2,9 +2,6 @@ import sys, os
 _raiz = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if _raiz not in sys.path:
     sys.path.insert(0, _raiz)
-"""
-Pruebas automatizadas para el Generador de Código Intermedio (IR).
-"""
 import unittest
 from AnalisisSema import Lexer, Parser, SemanticAnalyzer
 from compilador.ir.generator import IRGenerator, Cuadruplo, generar_ir
@@ -23,15 +20,6 @@ class TestIRGenerator(unittest.TestCase):
         return ast
 
     def test_aritmetica_basica(self):
-        """
-        Caso de evaluación aritmética con precedencia:
-        int x = 3 + 4 * 2;
-        Debe generar:
-        #1 (*, 4, 2, t1)
-        #2 (+, 3, t1, t2)
-        #3 (=, t2, , x)
-        Y postfija: 3 4 2 * +
-        """
         codigo = "int x = 3 + 4 * 2;"
         ast = self.compilar_a_ast(codigo)
         insts, postfijas, texto_ir = self.generator.generar(ast)
@@ -41,18 +29,12 @@ class TestIRGenerator(unittest.TestCase):
         self.assertEqual(insts[1].to_ir_tuple(), "#2 (+, 3, t1, t2)")
         self.assertEqual(insts[2].to_ir_tuple(), "#3 (=, t2, , x)")
 
-        # Verificar 3AC
         lineas_3ac = self.generator.obtener_texto_3ac().splitlines()
         self.assertEqual(lineas_3ac, ["t1 = 4 * 2", "t2 = 3 + t1", "x = t2"])
 
-        # Verificar Postfija
         self.assertTrue(any(p["postfija"] == "3 4 2 * +" for p in postfijas))
 
     def test_if_else_control_flujo(self):
-        """
-        Caso de control de flujo if-else:
-        if (x > 5) { x = x - 1; } else { x = 0; }
-        """
         codigo = "if (x > 5) { x = x - 1; } else { x = 0; }"
         ast = self.compilar_a_ast(codigo)
         insts, _, _ = self.generator.generar(ast)
@@ -68,12 +50,10 @@ class TestIRGenerator(unittest.TestCase):
         self.assertEqual(insts[7].to_ir_tuple(), "#8 (LABEL, , , L2)")
 
     def test_while_loop(self):
-        """Verifica la generación de cuádruplos para ciclo while."""
         codigo = "while (x < 10) { x = x + 1; }"
         ast = self.compilar_a_ast(codigo)
         insts, _, _ = self.generator.generar(ast)
 
-        # Debe tener L1, condición, IF_FALSE L2, cuerpo, GOTO L1, L2
         ops = [i.op for i in insts]
         self.assertIn("LABEL", ops)
         self.assertIn("<", ops)
@@ -82,7 +62,6 @@ class TestIRGenerator(unittest.TestCase):
         self.assertIn("GOTO", ops)
 
     def test_for_loop(self):
-        """Verifica la generación de cuádruplos para ciclo for."""
         codigo = "for (i = 0; i < 5; i = i + 1) { cout << i; }"
         ast = self.compilar_a_ast(codigo)
         insts, _, _ = self.generator.generar(ast)
@@ -96,18 +75,12 @@ class TestIRGenerator(unittest.TestCase):
         self.assertIn("GOTO", ops)
 
     def test_postfija_compleja(self):
-        """
-        Verifica postfija a + b * c -> a b c * +
-        """
         codigo = "int r = a + b * c;"
         ast = self.compilar_a_ast(codigo)
         _, postfijas, _ = self.generator.generar(ast)
         self.assertTrue(any("a b c * +" in p["postfija"] for p in postfijas))
 
     def test_cuadrado_limitado_ternario_y_funcion(self):
-        """
-        Verifica la función completa con operador ternario y return.
-        """
         codigo = """float cuadradoLimitado(x) float x {
             return (x<=-10.0||x>=10.0)?100:x*x;
         }"""

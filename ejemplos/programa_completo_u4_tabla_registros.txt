@@ -1,0 +1,23 @@
++------------+------------+--------------+--------+--------------------------+----------+------------+------------+----------------------+
+| Variable   | Tipo       | Rango Vida   | Grado  | Interfiere Con           | Color    | Virtual    | Reg. x86   | Ubicación            |
++------------+------------+--------------+--------+--------------------------+----------+------------+------------+----------------------+
+| a          | Variable   | [1, 1]       | 0      | —                        | Color 1 (C1) | R0         | EAX        | Registro EAX         |
+| b          | Variable   | [2, 2]       | 0      | —                        | Color 1 (C1) | R0         | EAX        | Registro EAX         |
+| c          | Variable   | [3, 13]      | 5      | i, t2, t3, t4, total     | Color 1 (C1) | R0         | EAX        | Registro EAX         |
+| i          | Variable   | [5, 13]      | 4      | c, t2, t3, total         | Color 3 (C3) | R2         | ECX        | Registro ECX         |
+| t2         | Temporal   | [7, 8]       | 3      | c, i, total              | Color 4 (C4) | R3         | EDX        | Registro EDX         |
+| t3         | Temporal   | [9, 10]      | 2      | c, i                     | Color 2 (C2) | R1         | EBX        | Registro EBX         |
+| t4         | Temporal   | [11, 12]     | 2      | c, total                 | Color 3 (C3) | R2         | ECX        | Registro ECX         |
+| t5         | Temporal   | [15, 16]     | 1      | total                    | Color 1 (C1) | R0         | EAX        | Registro EAX         |
+| total      | Variable   | [4, 17]      | 5      | c, i, t2, t4, t5         | Color 2 (C2) | R1         | EBX        | Registro EBX         |
++------------+------------+--------------+--------+--------------------------+----------+------------+------------+----------------------+
+
+a: 
+b: 
+c: i, t2, t3, t4, total
+i: c, t2, t3, total
+t2: c, i, total
+t3: c, i
+t4: c, total
+t5: total
+total: c, i, t2, t4, t5

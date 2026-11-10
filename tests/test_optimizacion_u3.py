@@ -1,8 +1,3 @@
-"""
-Suite de Pruebas Automatizadas para la Unidad 3:
-Optimización de Código Intermedio mediante Grafo de Flujo de Control (GFG / CFG).
-Materia: Lenguajes y Autómatas II.
-"""
 
 import sys
 import os
@@ -27,15 +22,8 @@ from compilador.opt import (
 
 
 class TestOptimizacionU3(unittest.TestCase):
-    """Pruebas exhaustivas para todas las técnicas y requerimientos de la Unidad 3."""
 
     def test_01_identificacion_bloques_basicos(self):
-        """
-        Verifica el algoritmo de particionado en bloques básicos y sus líderes:
-        - Líder 1: Primera instrucción.
-        - Líder 2: Destino de un salto.
-        - Líder 3: Instrucción posterior a un salto o return.
-        """
         insts = [
             Cuadruplo(1, "=", "5", "", "a"),
             Cuadruplo(2, "=", "10", "", "b"),
@@ -47,23 +35,20 @@ class TestOptimizacionU3(unittest.TestCase):
             Cuadruplo(8, "=", "0", "", "x"),
             Cuadruplo(9, "LABEL", "", "", "L2"),
             Cuadruplo(10, "return", "x", "", ""),
-            Cuadruplo(11, "=", "200", "", "w")  # Inalcanzable tras return
+            Cuadruplo(11, "=", "200", "", "w")
         ]
 
         bloques = identificar_bloques_basicos(insts)
         self.assertGreaterEqual(len(bloques), 4)
 
-        # Primer bloque debe contener las primeras instrucciones
         self.assertEqual(bloques[0].id, "B1")
         self.assertEqual(bloques[0].instrucciones[0].numero, 1)
         self.assertTrue(bloques[0].es_entrada)
 
-        # El bloque tras return debe estar separado
         ultimo_bloque = bloques[-1]
         self.assertEqual(ultimo_bloque.instrucciones[-1].resultado, "w")
 
     def test_02_construccion_cfg_y_sucesores(self):
-        """Verifica la construcción del Grafo de Flujo de Control y la Tabla de Sucesores."""
         insts = [
             Cuadruplo(1, "=", "1", "", "x"),
             Cuadruplo(2, "IF_FALSE", "x", "", "L1"),
@@ -81,7 +66,6 @@ class TestOptimizacionU3(unittest.TestCase):
         tabla_suc = cfg.obtener_tabla_sucesores()
         self.assertTrue(len(tabla_suc) >= 4)
 
-        # El bloque con IF_FALSE debe bifurcarse (2 sucesores)
         bloque_bifurcacion = None
         for b in bloques:
             if any(i.op.upper() == "IF_FALSE" for i in b.instrucciones):
@@ -91,11 +75,10 @@ class TestOptimizacionU3(unittest.TestCase):
         self.assertEqual(len(cfg.sucesores[bloque_bifurcacion.id]), 2)
 
     def test_03_analisis_alcanzabilidad_codigo_inalcanzable(self):
-        """Verifica que el código situado tras un return se detecte como inalcanzable."""
         insts = [
             Cuadruplo(1, "=", "10", "", "x"),
             Cuadruplo(2, "return", "x", "", ""),
-            Cuadruplo(3, "=", "999", "", "z")  # Instrucción inalcanzable
+            Cuadruplo(3, "=", "999", "", "z")
         ]
 
         bloques = identificar_bloques_basicos(insts)
@@ -107,7 +90,6 @@ class TestOptimizacionU3(unittest.TestCase):
         self.assertTrue(bloques[1].es_inalcanzable)
 
     def test_04_constant_folding(self):
-        """Verifica el cálculo en tiempo de compilación (Constant Folding)."""
         insts = [
             Cuadruplo(1, "+", "20", "30", "t1"),
             Cuadruplo(2, "*", "4", "5", "t2"),
@@ -119,16 +101,13 @@ class TestOptimizacionU3(unittest.TestCase):
         opt = IROptimizer(insts)
         opt_insts = opt.optimizar()
 
-        # Comprobar que 20 + 30 se convirtió en 50
         folding_transf = [t for t in opt.transformaciones if "Folding" in t.tecnica]
         self.assertGreaterEqual(len(folding_transf), 3)
 
-        # Verificar que el resultado de t1 fue plegado a 50
         t1_fold = any("50" in t.optimizado for t in folding_transf)
         self.assertTrue(t1_fold)
 
     def test_05_propagacion_constantes(self):
-        """Verifica la propagación de valores constantes conocidos."""
         insts = [
             Cuadruplo(1, "=", "5", "", "a"),
             Cuadruplo(2, "=", "10", "", "b"),
@@ -142,18 +121,16 @@ class TestOptimizacionU3(unittest.TestCase):
         prop_transf = [t for t in opt.transformaciones if "Propagación" in t.tecnica]
         self.assertGreater(len(prop_transf), 0)
 
-        # Al final t1 = 5 + 10 = 15, y return 15
         ret_inst = opt_insts[-1]
         self.assertEqual(ret_inst.op.lower(), "return")
         self.assertEqual(ret_inst.arg1, "15")
 
     def test_06_eliminacion_subexpresiones_comunes_cse(self):
-        """Verifica la reutilización de cálculos idénticos (CSE)."""
         insts = [
             Cuadruplo(1, "+", "x", "y", "t1"),
             Cuadruplo(2, "*", "a", "b", "t2"),
-            Cuadruplo(3, "+", "x", "y", "t3"),  # Idéntico a t1
-            Cuadruplo(4, "+", "y", "x", "t4"),  # Conmutativo a t1
+            Cuadruplo(3, "+", "x", "y", "t3"),
+            Cuadruplo(4, "+", "y", "x", "t4"),
             Cuadruplo(5, "print", "t3", "", ""),
             Cuadruplo(6, "print", "t4", "", "")
         ]
@@ -165,7 +142,6 @@ class TestOptimizacionU3(unittest.TestCase):
         self.assertGreaterEqual(len(cse_transf), 2)
 
     def test_07_simplificacion_saltos_condicion_constante(self):
-        """Verifica que ifFalse con condición verdadera elimine la bifurcación muerta."""
         insts = [
             Cuadruplo(1, "=", "1", "", "cond"),
             Cuadruplo(2, "IF_FALSE", "cond", "", "L_else"),
@@ -180,45 +156,26 @@ class TestOptimizacionU3(unittest.TestCase):
         opt = IROptimizer(insts)
         opt_insts = opt.optimizar()
 
-        # Debe eliminarse la rama de L_else (x = 200)
         self.assertFalse(any("200" in (i.arg1 or "") for i in opt_insts))
-        # Debe retornar 100
         self.assertEqual(opt_insts[-1].arg1, "100")
 
     def test_08_eliminacion_codigo_muerto_dce(self):
-        """Verifica que variables no leídas se eliminen pero con efectos secundarios se preserven."""
         insts = [
             Cuadruplo(1, "=", "500", "", "muerta1"),
             Cuadruplo(2, "=", "600", "", "muerta2"),
-            Cuadruplo(3, "print", "123", "", ""),      # Efecto secundario: no eliminar
-            Cuadruplo(4, "call", "mi_funcion", "0", "t1"), # Llamada: no eliminar
+            Cuadruplo(3, "print", "123", "", ""),
+            Cuadruplo(4, "call", "mi_funcion", "0", "t1"),
             Cuadruplo(5, "return", "42", "", "")
         ]
 
         opt = IROptimizer(insts)
         opt_insts = opt.optimizar()
 
-        # muerta1 y muerta2 deben eliminarse
         self.assertFalse(any(i.resultado in ("muerta1", "muerta2") for i in opt_insts))
-        # print y call deben preservarse
         self.assertTrue(any(i.op == "print" for i in opt_insts))
         self.assertTrue(any(i.op == "call" for i in opt_insts))
 
     def test_09_caso_integrador_completo_u3(self):
-        """
-        Verifica el programa integrador oficial de la Unidad 3:
-        int a = 5;
-        int b = 10;
-        int t1 = a + b;
-        int t2 = a + b;
-        int x;
-        if (t1 > 10) { x = 1; } else { x = 0; }
-        int y = x;
-        int z = 20 + 30;
-        int w = 100;
-        return y;
-        w = 200;
-        """
         codigo = """
         int a = 5;
         int b = 10;
@@ -243,33 +200,25 @@ class TestOptimizacionU3(unittest.TestCase):
         opt = IROptimizer(insts)
         opt_insts = opt.optimizar()
 
-        # 1. Comprobar que se ejecutó CSE
         self.assertTrue(any("CSE" in t.tecnica for t in opt.transformaciones))
 
-        # 2. Comprobar Constant Folding
         self.assertTrue(any("Folding" in t.tecnica for t in opt.transformaciones))
 
-        # 3. Comprobar Propagación de Constantes
         self.assertTrue(any("Propagación" in t.tecnica for t in opt.transformaciones))
 
-        # 4. Comprobar Eliminación de Bloques Inalcanzables (B5 w=200 o rama muerta)
         self.assertTrue(any("Inalcanzables" in t.tecnica for t in opt.transformaciones))
 
-        # 5. Comprobar Eliminación de Código Muerto (z, w, etc.)
         self.assertTrue(any("Muerto" in t.tecnica for t in opt.transformaciones))
 
-        # 6. Comprobar que el resultado final es return 1
         self.assertEqual(len(opt_insts), 1)
         self.assertEqual(opt_insts[0].op.lower(), "return")
         self.assertEqual(opt_insts[0].arg1, "1")
 
-        # 7. Comprobar reducción de métricas
         comp_cfg = opt.obtener_tabla_comparativa_cfg()
         self.assertGreater(len(comp_cfg), 3)
         self.assertGreater(opt.calcular_porcentaje_reduccion(), 80.0)
 
     def test_10_generacion_reporte_y_exportacion(self):
-        """Verifica la generación del reporte técnico y la exportación de before.ir y after.ir."""
         codigo = "int x = 3 + 4 * 2; return x;"
         insts, _, _ = generar_ir(codigo)
 
@@ -283,7 +232,6 @@ class TestOptimizacionU3(unittest.TestCase):
         self.assertIn("TABLA DE TRANSFORMACIONES APLICADAS", texto_rep)
         self.assertIn("ANÁLISIS DE RESULTADOS Y CONCLUSIONES", texto_rep)
 
-        # Exportar a directorio temporal
         tmp_dir = tempfile.mkdtemp()
         try:
             archivos = reporte.exportar_archivos(tmp_dir)
@@ -298,7 +246,6 @@ class TestOptimizacionU3(unittest.TestCase):
             shutil.rmtree(tmp_dir)
 
     def test_11_seguridad_en_bucles_while(self):
-        """Verifica que las variables redefinidas dentro de un loop no se sobre-propaguen erróneamente."""
         codigo = """
         int x = 0;
         while (x < 10) {
@@ -310,11 +257,9 @@ class TestOptimizacionU3(unittest.TestCase):
         opt = IROptimizer(insts)
         opt_insts = opt.optimizar()
 
-        # Debe conservar el bucle y la comparación
         self.assertTrue(any(i.op in ("<", "IF_FALSE", "IFFALSE") for i in opt_insts))
         self.assertTrue(any(i.op.lower() == "return" for i in opt_insts))
     def test_12_generacion_y_optimizacion_desde_ast_y_tupla(self):
-        """Verifica que generar_ir y IRGenerator acepten tanto AST como tuplas (codigo, parser, ast)."""
         from AnalisisSema import Lexer, Parser
         from compilador.ir.generator import IRGenerator
 
@@ -324,23 +269,19 @@ class TestOptimizacionU3(unittest.TestCase):
         parser = Parser(tokens, codigo)
         ast = parser.parse()
 
-        # 1. Pasando el AST directamente
         gen1 = IRGenerator()
         insts1, _, _ = gen1.generar(ast)
         self.assertGreater(len(insts1), 0)
 
-        # 2. Pasando la tupla (codigo, parser, ast) como devolvía _parsear()
         gen2 = IRGenerator()
         insts2, _, _ = gen2.generar((codigo, parser, ast))
         self.assertEqual(len(insts1), len(insts2))
 
-        # 3. Optimizar las instrucciones generadas
         opt = IROptimizer(insts1)
         opt.optimizar()
         self.assertGreater(len(opt.transformaciones), 0)
 
     def test_13_optimizacion_expresiones_diversas(self):
-        """Verifica que el optimizador funcione con distintas expresiones y programas."""
         from AnalisisSema import Lexer, Parser
         from compilador.ir.generator import IRGenerator
 
@@ -365,5 +306,64 @@ class TestOptimizacionU3(unittest.TestCase):
             self.assertGreater(len(opt_insts), 0)
 
 
+    def test_14_ejemplo_clase_codigo_intermedio(self):
+        from AnalisisSema import Lexer, Parser, SemanticAnalyzer
+        from compilador.ir.generator import IRGenerator
+
+        codigo = """#include <iostream>
+
+class CodigoIntermedio {
+public:
+    static int ejecutar() {
+        int a = 5;
+        int b = 10;
+        int t1 = a + b;
+        int t2 = a + b;
+        int x;
+        if (t1 > 10) {
+            x = 1;
+        } else {
+            x = 0;
+        }
+        int y = x;
+        int z = 20 + 30;
+        int w = 100;
+        return y;
+        // Código inalcanzable:
+        // w = 200;
+    }
+};
+
+int main() {
+    std::cout << CodigoIntermedio::ejecutar() << std::endl;
+    return 0;
+}"""
+        lexer = Lexer(codigo)
+        tokens = lexer.tokenize()
+        errores_lex = [t for t in tokens if t.type == 'ERROR']
+        self.assertEqual(len(errores_lex), 0)
+
+        parser = Parser(tokens, codigo)
+        ast = parser.parse()
+        self.assertEqual(len(parser.errors), 0)
+
+        analizador = SemanticAnalyzer()
+        errores_sem, tabla = analizador.analizar(ast)
+        self.assertEqual(len(errores_sem), 0)
+
+        gen = IRGenerator()
+        insts, _, _ = gen.generar(ast)
+        self.assertGreater(len(insts), 10)
+
+        opt = IROptimizer(insts)
+        opt_insts = opt.optimizar()
+        self.assertGreater(len(opt.transformaciones), 5)
+
+        ops = [i.op.lower() for i in opt_insts]
+        self.assertIn("call", ops)
+        self.assertIn("return", ops)
+
+
 if __name__ == "__main__":
     unittest.main()
+
